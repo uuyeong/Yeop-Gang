@@ -86,15 +86,56 @@ def process_course_assets(
                         )
                         ingested_count += result.get("ingested", 0)
                     
-                    print(f"STT 처리 완료: {len(segments)}개 세그먼트, 파일: {video_path.name}")
+                    print(f"[{course_id}] 세그먼트 인제스트 완료")
                 else:
-                    print(f"STT 처리 결과가 비어있습니다: {video_path.name}")
+                    print(f"[{course_id}] STT 결과 텍스트가 비어있습니다: {media_path.name}")
                     
             except Exception as e:
-                error_msg = f"STT 처리 오류 ({video_path.name}): {str(e)}"
+                error_msg = f"[{course_id}] STT 처리 오류 ({media_path.name}): {str(e)}"
                 print(error_msg)
                 # 오류가 발생해도 계속 진행
-                texts.append(f"STT 처리 오류: {error_msg}")
+        
+        # audio_path가 별도로 제공된 경우 처리 (video_path가 없을 때만)
+        if audio_path and audio_path.exists() and not video_path:
+            try:
+                print(f"[{course_id}] 오디오 STT 처리 시작: {audio_path.name}")
+                transcript_result = transcribe_video(str(audio_path), settings=settings)
+                transcript_text = transcript_result.get("text", "")
+                segments = transcript_result.get("segments", [])
+                
+                if transcript_text:
+                    texts.append(transcript_text)
+                    
+                    print(f"[{course_id}] {len(segments)}개 오디오 세그먼트 인제스트 시작...")
+                    for idx, seg in enumerate(segments):
+                        seg_text = seg.get("text", "")
+                        if not seg_text:
+                            continue
+                        
+                        seg_meta = {
+                            "course_id": course_id,
+                            "instructor_id": instructor_id,
+                            "source": audio_path.name,
+                            "start_time": seg.get("start"),
+                            "end_time": seg.get("end"),
+                            "segment_index": idx,
+                            "type": "audio_segment",
+                        }
+                        
+                        result = pipeline.ingest_texts(
+                            [seg_text],
+                            course_id=course_id,
+                            metadata=seg_meta,
+                        )
+                        ingested_count += result.get("ingested", 0)
+                    
+                    print(f"[{course_id}] 오디오 세그먼트 인제스트 완료")
+                else:
+                    print(f"[{course_id}] 오디오 STT 결과 텍스트가 비어있습니다: {audio_path.name}")
+                    
+            except Exception as e:
+                error_msg = f"[{course_id}] 오디오 STT 처리 오류 ({audio_path.name}): {str(e)}"
+                print(error_msg)
         
         # 2. PDF 멀티모달 처리 (텍스트 + 이미지 설명)
         if pdf_path and pdf_path.exists():
