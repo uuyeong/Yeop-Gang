@@ -6,8 +6,11 @@ from ai.services.embeddings import embed_texts
 
 try:
     from openai import OpenAI
+    from openai import RateLimitError, APIError
 except Exception:
     OpenAI = None  # type: ignore
+    RateLimitError = None  # type: ignore
+    APIError = None  # type: ignore
 
 
 class RAGPipeline:
@@ -30,21 +33,44 @@ class RAGPipeline:
     ) -> dict:
         """
         Ingest texts with embeddings and course-scoped metadata.
+        
+        IDs are generated to be unique:
+        - If metadata has segment_index: use "{course_id}-seg-{segment_index}"
+        - If metadata has page_number: use "{course_id}-page-{page_number}"
+        - Otherwise: use "{course_id}-doc-{i}" with auto-increment
         """
         entries = list(texts)
         if not entries:
             return {"ingested": 0}
 
         md = metadata or {}
-        for _ in entries:
-            md.setdefault("course_id", course_id)
+        md.setdefault("course_id", course_id)
 
         embeddings = embed_texts(entries, self.settings)
 
+        # Generate unique IDs based on metadata
+        ids = []
+        metadatas = []
+        
+        for i, entry in enumerate(entries):
+            # Use segment_index or page_number if available for unique ID
+            if md.get("segment_index") is not None:
+                doc_id = f"{course_id}-seg-{md['segment_index']}"
+            elif md.get("page_number") is not None:
+                doc_id = f"{course_id}-page-{md['page_number']}"
+            elif md.get("type") == "persona":
+                doc_id = f"{course_id}-persona"
+            else:
+                # Fallback: use index (may cause overwrites if called multiple times)
+                doc_id = f"{course_id}-doc-{i}"
+            
+            ids.append(doc_id)
+            metadatas.append({**md, "course_id": course_id})
+
         self.collection.upsert(
-            ids=[f"{course_id}-doc-{i}" for i, _ in enumerate(entries)],
+            ids=ids,
             documents=entries,
-            metadatas=[{**md, "course_id": course_id} for _ in entries],
+            metadatas=metadatas,
             embeddings=embeddings,
         )
         return {"ingested": len(entries)}
@@ -54,7 +80,7 @@ class RAGPipeline:
         question: str, 
         *, 
         course_id: str, 
-        k: int = 4,
+        k: int = 10,  # 증가: 더 많은 컨텍스트를 가져오기 위해 기본값 증가
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> dict:
         """
@@ -69,7 +95,16 @@ class RAGPipeline:
         """
         try:
             # 질문을 임베딩으로 변환 (ingest_texts와 동일한 방식)
-            query_embeddings = embed_texts([question], self.settings)
+            try:
+                query_embeddings = embed_texts([question], self.settings)
+            except ValueError as e:
+                # API 할당량 초과 등 임베딩 생성 실패 시
+                return {
+                    "question": question,
+                    "documents": [],
+                    "metadatas": [],
+                    "answer": f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {str(e)}",
+                }
             # 페르소나 프롬프트도 포함하기 위해 k+1로 검색
             results = self.collection.query(
                 query_embeddings=query_embeddings,
@@ -104,6 +139,19 @@ class RAGPipeline:
         metas_all = results.get("metadatas", []) or [[]]
         docs: List[str] = docs_all[0] if docs_all else []
         metas: List[Dict[str, Any]] = metas_all[0] if metas_all else []
+        
+        # 디버깅: 검색된 문서 확인
+        print(f"[RAG DEBUG] course_id={course_id}, 검색된 문서 수: {len(docs)}")
+        if docs:
+            print(f"[RAG DEBUG] 첫 번째 문서 (처음 200자): {docs[0][:200]}")
+            if metas:
+                print(f"[RAG DEBUG] 첫 번째 문서 메타데이터: {metas[0]}")
+            if len(docs) < 3:
+                print(f"[RAG DEBUG] ⚠️ 경고: 검색된 문서가 {len(docs)}개로 적습니다. 더 많은 컨텍스트가 필요할 수 있습니다.")
+        else:
+            print(f"[RAG DEBUG] ⚠️ 경고: course_id={course_id}에 대한 검색 결과가 비어있습니다!")
+            print(f"[RAG DEBUG] ChromaDB에 해당 course_id의 데이터가 있는지 확인하세요.")
+        
         answer = self._llm_answer(
             question, 
             docs, 
@@ -157,17 +205,22 @@ class RAGPipeline:
         # 오디오 지식 우선, GPT 지식 보조 프롬프트
         if context:
             knowledge_instruction = (
-                "중요: 아래 '강의 컨텍스트'에 있는 내용이 가장 우선순위가 높습니다. "
-                "먼저 강의 컨텍스트에서 답을 찾으세요. "
-                "강의 컨텍스트에 명확한 답이 있으면 그대로 사용하세요. "
-                "강의 컨텍스트에 없는 내용이 필요할 때만 일반적인 지식으로 보완하세요.\n\n"
-                "강의 컨텍스트:\n"
-                f"{context}"
+                "⚠️ 매우 중요: 아래 '강의 컨텍스트'는 강의의 일부 내용입니다. "
+                "이 컨텍스트는 전체 강의의 일부 예시나 일부분일 수 있습니다. "
+                "특정 예시만 보고 강의 전체 내용을 판단하지 마세요. "
+                "질문에 대한 답변은 제공된 컨텍스트 내에서 찾되, "
+                "전체적인 맥락을 고려하여 답변하세요.\n\n"
+                "강의 컨텍스트 (일부):\n"
+                f"{context}\n\n"
+                "주의: 위 컨텍스트는 강의의 일부이므로, 특정 예시만으로 전체 강의 주제를 판단하지 마세요."
             )
         else:
+            # 검색 결과가 없을 때는 명확히 알려주기
             knowledge_instruction = (
-                "강의 컨텍스트를 찾지 못했습니다. "
-                "일반적인 지식으로 답변하되, 강의 범위와 관련된 내용임을 명시하세요."
+                "⚠️ 경고: 강의 컨텍스트를 찾지 못했습니다. "
+                "이 질문에 답하기 위해서는 해당 강의의 데이터가 벡터 DB에 인제스트되어 있어야 합니다. "
+                "강의 데이터가 업로드되고 처리되었는지 확인하세요. "
+                "일반적인 지식으로 답변하지 마세요. '강의 데이터를 찾을 수 없습니다'라고 답변하세요."
             )
         
         sys_prompt = (
@@ -176,6 +229,8 @@ class RAGPipeline:
             f"{knowledge_instruction}\n\n"
             "답변 규칙:\n"
             "- 강의 컨텍스트의 내용을 최우선으로 사용하세요.\n"
+            "- ⚠️ 제공된 컨텍스트가 강의의 일부일 수 있으므로, 특정 예시만으로 전체 강의 주제를 판단하지 마세요.\n"
+            "- '이건 무슨 강의'와 같은 질문에는 제공된 컨텍스트에서 전체적인 주제와 맥락을 파악하여 답변하세요.\n"
             "- 강의 컨텍스트에 없는 내용은 일반 지식으로 보완 가능하지만, 강의 내용임을 강조하세요.\n"
             "- 모르면 모른다고 말하세요.\n"
             "- 코스 범위 밖 질문은 답하지 않습니다.\n"
@@ -206,14 +261,17 @@ class RAGPipeline:
                 temperature=0.3,
             )
             return resp.choices[0].message.content
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient_quota" in error_msg or "quota" in error_msg.lower():
-                return "⚠️ OpenAI API 할당량이 초과되었습니다. OpenAI 계정의 크레딧을 확인하거나 결제 정보를 업데이트하세요."
-            elif "rate_limit" in error_msg.lower() or "429" in error_msg:
-                return "⚠️ OpenAI API Rate Limit 초과: 잠시 후 다시 시도하세요."
-            else:
-                return f"⚠️ LLM 응답 생성 중 오류 발생: {error_msg}"
+        except RateLimitError as e:
+            error_msg = (
+                "OpenAI API 할당량을 초과했습니다. "
+                "계정의 결제 정보와 사용 한도를 확인해주세요."
+            )
+            print(f"ERROR [LLM]: {error_msg} (에러 코드: {e.status_code if hasattr(e, 'status_code') else '429'})")
+            return f"⚠️ {error_msg}"
+        except APIError as e:
+            error_msg = f"OpenAI API 오류가 발생했습니다: {str(e)}"
+            print(f"ERROR [LLM]: {error_msg}")
+            return f"⚠️ {error_msg}"
 
     def generate_persona_prompt(
         self, *, course_id: str, sample_texts: list[str]
@@ -275,6 +333,22 @@ class RAGPipeline:
                 temperature=0.3,
             )
             style_analysis = resp.choices[0].message.content
+        except RateLimitError as e:
+            print(f"Warning: OpenAI API 할당량 초과로 페르소나 분석 실패: {e}")
+            # Fallback to simple prompt
+            sample = sample_texts[0][:500] if sample_texts else ""
+            return (
+                f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
+                f"아래 샘플을 참고하여 답변하세요:\n{sample}"
+            )
+        except APIError as e:
+            print(f"Warning: OpenAI API 오류로 페르소나 분석 실패: {e}")
+            # Fallback to simple prompt
+            sample = sample_texts[0][:500] if sample_texts else ""
+            return (
+                f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
+                f"아래 샘플을 참고하여 답변하세요:\n{sample}"
+            )
             
             # Generate persona prompt based on analysis
             persona_instruction = f"""당신은 course_id={course_id} 강사의 말투와 스타일을 정확하게 모방하는 AI 챗봇입니다.
