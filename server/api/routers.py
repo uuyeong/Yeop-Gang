@@ -1,11 +1,12 @@
 # dh: 이 파일은 기존 호환성을 위해 유지됩니다.
 # dh: 새로운 보안 기능이 포함된 API는 server/api/dh_routers.py를 사용하세요.
 
-from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, Request, HTTPException
 from fastapi.params import Form, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlmodel import Session, select
 from pathlib import Path
+import os
 
 from ai.pipelines.rag import RAGPipeline
 from api.schemas import (
@@ -33,6 +34,79 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def get_pipeline(settings: AISettings = Depends(AISettings)) -> RAGPipeline:
     return RAGPipeline(settings)
+
+
+def _serve_video_with_range(file_path: Path, media_type: str, request: Request = None):
+    """
+    HTTP Range 요청을 지원하는 비디오 스트리밍 응답 생성
+    대용량 비디오 파일의 빠른 로딩을 위해 Range 요청을 명시적으로 처리
+    """
+    file_size = file_path.stat().st_size
+    
+    # Range 요청 처리
+    range_header = request.headers.get("range") if request else None
+    
+    if range_header:
+        # Range 헤더 파싱: "bytes=start-end"
+        range_match = range_header.replace("bytes=", "").split("-")
+        start = int(range_match[0]) if range_match[0] else 0
+        end = int(range_match[1]) if range_match[1] and range_match[1] else file_size - 1
+        
+        # 범위 검증
+        if start >= file_size or end >= file_size or start > end:
+            return Response(
+                status_code=416,  # Range Not Satisfiable
+                headers={"Content-Range": f"bytes */{file_size}"}
+            )
+        
+        content_length = end - start + 1
+        
+        def generate_range():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk_size = min(8192, remaining)  # 8KB 청크
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+        
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Type": media_type,
+        }
+        
+        return StreamingResponse(
+            generate_range(),
+            status_code=206,  # Partial Content
+            headers=headers,
+            media_type=media_type,
+        )
+    else:
+        # Range 요청이 없으면 전체 파일 스트리밍 (청크 단위)
+        def generate():
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(8192)  # 8KB 청크
+                    if not chunk:
+                        break
+                    yield chunk
+        
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": media_type,
+        }
+        
+        return StreamingResponse(
+            generate(),
+            media_type=media_type,
+            headers=headers,
+        )
 
 
 @router.get("/health")
@@ -198,7 +272,7 @@ _conversation_history: dict[str, list[dict[str, str]]] = {}
 
 
 @router.get("/video/{course_id}")
-def get_video(course_id: str, session: Session = Depends(get_session)) -> FileResponse:
+def get_video(course_id: str, request: Request, session: Session = Depends(get_session)):
     """
     Get video/audio file for a course. Returns the first video or audio file found for the course.
     Supports both mp4 (video) and mp3 (audio) files.
@@ -225,8 +299,13 @@ def get_video(course_id: str, session: Session = Depends(get_session)) -> FileRe
             # storage_path가 절대 경로인지 상대 경로인지 확인
             video_path = Path(vid.storage_path)
             if not video_path.is_absolute():
-                # 상대 경로면 uploads_dir 기준으로 절대 경로 변환
-                video_path = settings.uploads_dir / video_path
+                # 상대 경로인 경우
+                # storage_path가 이미 "data/uploads/..." 형태로 시작하면 프로젝트 루트 기준으로 해석
+                if str(video_path).startswith("data/uploads/"):
+                    video_path = PROJECT_ROOT / video_path
+                else:
+                    # 그 외의 경우 uploads_dir 기준으로 절대 경로 변환
+                    video_path = settings.uploads_dir / video_path
             else:
                 video_path = video_path.resolve()
             
@@ -234,25 +313,12 @@ def get_video(course_id: str, session: Session = Depends(get_session)) -> FileRe
                 suffix = video_path.suffix.lower()
                 logger.info(f"Found video file: {video_path} (suffix: {suffix})")
                 if suffix == ".mp4":
-                    return FileResponse(
-                        video_path, 
-                        media_type="video/mp4",
-                        headers={
-                            "Accept-Ranges": "bytes",
-                            "Content-Length": str(video_path.stat().st_size),
-                        }
-                    )
+                    return _serve_video_with_range(video_path, "video/mp4", request)
                 elif suffix in [".avi", ".mov", ".mkv", ".webm"]:
-                    return FileResponse(
-                        video_path, 
-                        media_type="video/mp4",
-                        headers={
-                            "Accept-Ranges": "bytes",
-                            "Content-Length": str(video_path.stat().st_size),
-                        }
-                    )
+                    return _serve_video_with_range(video_path, "video/mp4", request)
             else:
-                logger.warning(f"Video file not found at path: {video_path}")
+                # 디버그 레벨로 변경 (너무 많은 경고 방지)
+                logger.debug(f"Video file not found at path: {video_path}")
         
         # audio 타입 파일 확인 (mp3 포함)
         audios = session.exec(
@@ -265,8 +331,13 @@ def get_video(course_id: str, session: Session = Depends(get_session)) -> FileRe
             # storage_path가 절대 경로인지 상대 경로인지 확인
             audio_path = Path(audio.storage_path)
             if not audio_path.is_absolute():
-                # 상대 경로면 uploads_dir 기준으로 절대 경로 변환
-                audio_path = settings.uploads_dir / audio_path
+                # 상대 경로인 경우
+                # storage_path가 이미 "data/uploads/..." 형태로 시작하면 프로젝트 루트 기준으로 해석
+                if str(audio_path).startswith("data/uploads/"):
+                    audio_path = PROJECT_ROOT / audio_path
+                else:
+                    # 그 외의 경우 uploads_dir 기준으로 절대 경로 변환
+                    audio_path = settings.uploads_dir / audio_path
             else:
                 audio_path = audio_path.resolve()
             
@@ -301,7 +372,8 @@ def get_video(course_id: str, session: Session = Depends(get_session)) -> FileRe
                         }
                     )
             else:
-                logger.warning(f"Audio file not found at path: {audio_path}")
+                # 디버그 레벨로 변경 (너무 많은 경고 방지)
+                logger.debug(f"Audio file not found at path: {audio_path}")
         
         # DB에 레코드는 있지만 파일이 없는 경우, 파일 시스템에서 직접 찾기
         # instructor_id/course_id 구조로 찾기
@@ -313,27 +385,13 @@ def get_video(course_id: str, session: Session = Depends(get_session)) -> FileRe
                 for video_file in course_dir.glob("*.mp4"):
                     if video_file.exists():
                         logger.info(f"Found video file via filesystem search: {video_file}")
-                        return FileResponse(
-                            video_file, 
-                            media_type="video/mp4",
-                            headers={
-                                "Accept-Ranges": "bytes",
-                                "Content-Length": str(video_file.stat().st_size),
-                            }
-                        )
+                        return _serve_video_with_range(video_file, "video/mp4", request)
                 # 다른 비디오 형식 찾기
                 for ext in [".avi", ".mov", ".mkv", ".webm"]:
                     for video_file in course_dir.glob(f"*{ext}"):
                         if video_file.exists():
                             logger.info(f"Found video file via filesystem search: {video_file}")
-                            return FileResponse(
-                                video_file, 
-                                media_type="video/mp4",
-                                headers={
-                                    "Accept-Ranges": "bytes",
-                                    "Content-Length": str(video_file.stat().st_size),
-                                }
-                            )
+                            return _serve_video_with_range(video_file, "video/mp4", request)
                 # mp3 파일 찾기
                 for audio_file in course_dir.glob("*.mp3"):
                     if audio_file.exists():
@@ -363,7 +421,8 @@ def get_video(course_id: str, session: Session = Depends(get_session)) -> FileRe
     # Fallback: try ref/video folder for testing
     ref_video = PROJECT_ROOT / "ref" / "video" / "testvedio_1.mp4"
     if ref_video.exists():
-        return FileResponse(ref_video, media_type="video/mp4")
+        logger.info(f"Using fallback video file: {ref_video}")
+        return _serve_video_with_range(ref_video, "video/mp4", request)
     
     from fastapi import HTTPException
     raise HTTPException(status_code=404, detail=f"Video/Audio not found for course_id: {course_id}")
