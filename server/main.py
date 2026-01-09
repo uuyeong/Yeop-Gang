@@ -60,6 +60,21 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:
+        # 디버깅: API 키 로드 확인
+        from ai.config import AISettings
+        settings = AISettings()
+        if settings.openai_api_key:
+            api_key_preview = settings.openai_api_key[:10] + "..." + settings.openai_api_key[-4:] if len(settings.openai_api_key) > 14 else "***"
+            print(f"[DEBUG] [Main] ✅ OPENAI_API_KEY loaded on startup: {api_key_preview}")
+        else:
+            print(f"[DEBUG] [Main] ⚠️ OPENAI_API_KEY is None on startup!")
+            # os.environ에서 직접 확인
+            env_key = os.environ.get("OPENAI_API_KEY")
+            if env_key:
+                print(f"[DEBUG] [Main] ⚠️ But os.environ has OPENAI_API_KEY: {env_key[:10]}...")
+            else:
+                print(f"[DEBUG] [Main] ⚠️ os.environ also does not have OPENAI_API_KEY")
+        
         # ffmpeg 경로를 환경 변수에 추가 (whisper 라이브러리가 사용)
         ffmpeg_path = shutil.which("ffmpeg")
         

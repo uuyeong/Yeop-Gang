@@ -118,11 +118,24 @@ class RAGPipeline:
                 query_embeddings = embed_texts([question], self.settings)
             except ValueError as e:
                 # API 할당량 초과 등 임베딩 생성 실패 시
+                error_msg = str(e)
+                if "할당량" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg.lower():
+                    detailed_msg = (
+                        "⚠️ OpenAI API 할당량이 초과되었습니다.\n\n"
+                        "해결 방법:\n"
+                        "1. OpenAI 대시보드(https://platform.openai.com/account/billing)에서 크레딧 잔액 확인\n"
+                        "2. 결제 정보 등록 및 크레딧 추가\n"
+                        "3. Rate Limits(https://platform.openai.com/account/limits) 확인\n\n"
+                        f"에러 상세: {error_msg}"
+                    )
+                else:
+                    detailed_msg = f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {error_msg}"
+                
                 return {
                     "question": question,
                     "documents": [],
                     "metadatas": [],
-                    "answer": f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {str(e)}",
+                    "answer": detailed_msg,
                 }
             results = self.collection.query(
                 query_embeddings=query_embeddings,
@@ -182,32 +195,24 @@ class RAGPipeline:
                 print(f"[RAG DEBUG] ⚠️ Could not check vector DB: {e}")
         
         # 페르소나를 명시적으로 별도 검색 (질문과 관계없이 항상 가져오기)
+        # ⚠️ query_texts를 사용하면 ChromaDB가 내부적으로 임베딩을 생성할 수 있으므로
+        # get() 메서드만 사용하여 불필요한 API 호출 방지
         persona_doc = None
         try:
-            # 방법 1: ID로 직접 가져오기 시도
-            try:
-                persona_results = self.collection.get(
-                    ids=[f"{course_id}-persona"],
-                    include=["documents", "metadatas"],
-                )
-                if persona_results.get("documents") and len(persona_results["documents"]) > 0:
-                    persona_doc = persona_results["documents"][0]
-                    print(f"[RAG DEBUG] ✅ 페르소나를 ID로 검색했습니다 (course_id={course_id})")
-            except Exception:
-                # 방법 2: where 필터로 검색 (get이 실패하면 query 사용)
-                persona_query = self.collection.query(
-                    query_texts=["persona"],  # 페르소나 검색용 더미 텍스트
-                    n_results=1,
-                    include=["documents", "metadatas"],
-                    where={"course_id": course_id, "type": "persona"},
-                )
-                if persona_query.get("documents") and len(persona_query["documents"]) > 0:
-                    persona_doc = persona_query["documents"][0][0]  # query는 2차원 배열 반환
-                    print(f"[RAG DEBUG] ✅ 페르소나를 where 필터로 검색했습니다 (course_id={course_id})")
-                else:
-                    print(f"[RAG DEBUG] ⚠️ 페르소나가 벡터 DB에 없습니다 (course_id={course_id})")
+            # ID로 직접 가져오기 (임베딩 생성 없음)
+            persona_results = self.collection.get(
+                ids=[f"{course_id}-persona"],
+                include=["documents", "metadatas"],
+            )
+            if persona_results.get("documents") and len(persona_results["documents"]) > 0:
+                persona_doc = persona_results["documents"][0]
+                print(f"[RAG DEBUG] ✅ 페르소나를 ID로 검색했습니다 (course_id={course_id}, 임베딩 호출 없음)")
+            else:
+                print(f"[RAG DEBUG] ⚠️ 페르소나가 벡터 DB에 없습니다 (course_id={course_id})")
         except Exception as e:
-            print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류: {e}")
+            # get()이 실패하면 (예: ID가 없거나 컬렉션 문제) 페르소나 없이 진행
+            print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류 (get 실패): {e}")
+            # ⚠️ query_texts를 사용하지 않음 - 불필요한 임베딩 API 호출 방지
         
         # 검색 결과에서 페르소나 제거 (중복 방지)
         filtered_docs = []
