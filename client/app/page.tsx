@@ -46,14 +46,14 @@ export default function Home() {
             <span>옆강</span>
           </div>
           <h1 className="mb-4 text-5xl font-bold text-slate-900">
-            MAIN 화면
+            MAIN 페이지
           </h1>
           <p className="mx-auto max-w-2xl text-lg text-slate-600">
-            강의 영상을 업로드하고 AI 튜터와 함께 학습하세요.
+            강의 영상을 시청하고 AI 튜터와 실시간으로 질문하며 학습하세요.
           </p>
         </div>
 
-        {/* 메인 액션 버튼 */}
+        {/* 메인 액션 버튼 - 학생 중심 */}
         <div className="mb-20 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
           {/* 강사 로그인 시에만 강의 업로드 버튼 표시 */}
           {isInstructor && (
@@ -110,7 +110,7 @@ export default function Home() {
             <p className="text-sm text-slate-600">
               자동 생성된 요약노트와 퀴즈를 통해 학습 내용을 효과적으로 복습할 수 있습니다.
             </p>
-        </div>
+          </div>
         </div>
       </div>
     </div>

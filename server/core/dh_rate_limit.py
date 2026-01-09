@@ -61,6 +61,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in excluded_paths or request.url.path.startswith("/api/status/"):
             return await call_next(request)
         
+        # /api/status 엔드포인트는 rate limit 제외 (폴링용)
+        if request.url.path.startswith("/api/status/"):
+            return await call_next(request)
+        
         # Rate limit key 생성 (IP 주소 또는 사용자 ID)
         client_ip = request.client.host if request.client else "unknown"
         

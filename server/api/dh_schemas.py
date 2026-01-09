@@ -5,7 +5,7 @@
 """
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 
 # 기존 스키마들 import
 from api.schemas import (
@@ -51,7 +51,7 @@ class RegisterStudentRequest(BaseModel):
     """학생 등록 요청"""
     id: str = Field(..., description="학생 ID")
     name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     password: str = Field(..., description="비밀번호")
 
 

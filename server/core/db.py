@@ -6,11 +6,12 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from core.config import AppSettings
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# server 폴더 기준 경로
+SERVER_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _prepare_sqlite_url(url: str) -> str:
-    """Ensure sqlite file path exists and is absolute, fallback to project data/ if permission denied."""
+    """Ensure sqlite file path exists and is absolute, fallback to server data/ if permission denied."""
     if not url.startswith("sqlite"):
         return url
 
@@ -22,13 +23,14 @@ def _prepare_sqlite_url(url: str) -> str:
         file_path = Path(path)
 
     if not file_path.is_absolute():
-        file_path = PROJECT_ROOT / file_path
+        # server 폴더 기준으로 해석
+        file_path = SERVER_ROOT / file_path
 
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
     except (PermissionError, OSError):
-        # Read-only or permission-denied: fallback to project-local data directory
-        fallback = PROJECT_ROOT / "data" / file_path.name
+        # Read-only or permission-denied: fallback to server data directory
+        fallback = SERVER_ROOT / "data" / file_path.name
         fallback.parent.mkdir(parents=True, exist_ok=True)
         file_path = fallback
 
