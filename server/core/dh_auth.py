@@ -36,7 +36,16 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def get_password_hash(password: str) -> str:
-    """비밀번호 해싱"""
+    """비밀번호 해싱
+    
+    bcrypt는 최대 72바이트까지만 처리할 수 있으므로,
+    더 긴 비밀번호는 자동으로 잘라냅니다.
+    """
+    # bcrypt는 최대 72바이트까지만 처리 가능
+    if isinstance(password, str):
+        password_bytes = password.encode('utf-8')
+        if len(password_bytes) > 72:
+            password = password_bytes[:72].decode('utf-8', errors='ignore')
     return pwd_context.hash(password)
 
 

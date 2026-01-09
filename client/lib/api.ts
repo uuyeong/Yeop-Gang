@@ -5,7 +5,8 @@
  * - 에러 처리
  */
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export type ApiError = {
   message: string;
@@ -20,7 +21,8 @@ export function handleApiError(error: unknown): ApiError {
   // 네트워크 오류
   if (error instanceof TypeError && error.message.includes("fetch")) {
     return {
-      message: "네트워크 연결을 확인할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.",
+      message:
+        "네트워크 연결을 확인할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.",
       code: "NETWORK_ERROR",
     };
   }
@@ -72,7 +74,9 @@ export async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const url = endpoint.startsWith("http") ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const url = endpoint.startsWith("http")
+    ? endpoint
+    : `${API_BASE_URL}${endpoint}`;
 
   try {
     const response = await fetch(url, {
@@ -164,7 +168,9 @@ export async function apiUpload<T>(
   formData: FormData,
   options?: RequestInit
 ): Promise<T> {
-  const url = endpoint.startsWith("http") ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const url = endpoint.startsWith("http")
+    ? endpoint
+    : `${API_BASE_URL}${endpoint}`;
 
   try {
     const response = await fetch(url, {
@@ -184,3 +190,4 @@ export async function apiUpload<T>(
   }
 }
 
+// 인증 API는 client/lib/authApi.ts에서 제공됩니다.

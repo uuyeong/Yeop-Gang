@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import ClientLayout from "../components/ClientLayout";
 
 export const metadata: Metadata = {
   title: "Yeop-Gang",
@@ -13,7 +14,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
-      <body>{children}</body>
+      <body>
+        <ClientLayout>{children}</ClientLayout>
+      </body>
     </html>
   );
 }

@@ -70,8 +70,8 @@ def _migrate_add_progress_column() -> None:
         logger.debug(f"Progress column migration: {e}")
 
 
-def _migrate_add_category_column() -> None:
-    """Course 테이블에 category 컬럼 추가 (마이그레이션)"""
+def _migrate_add_instructor_profile_columns() -> None:
+    """Instructor 테이블에 프로필 관련 컬럼 추가 (마이그레이션)"""
     try:
         from sqlalchemy import inspect, text
         
@@ -81,59 +81,45 @@ def _migrate_add_category_column() -> None:
         
         # 테이블이 존재하는지 확인
         inspector = inspect(engine)
-        if "course" not in inspector.get_table_names():
+        if "instructor" not in inspector.get_table_names():
             return
         
-        # category 컬럼이 이미 있는지 확인
-        columns = [col["name"] for col in inspector.get_columns("course")]
-        if "category" in columns:
-            return
+        columns = [col["name"] for col in inspector.get_columns("instructor")]
         
-        # ALTER TABLE 실행 (autocommit 모드)
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE course ADD COLUMN category VARCHAR"))
+        # 비밀번호 해시 컬럼 추가
+        if "password_hash" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN password_hash TEXT"))
+        
+        # 프로필 이미지 URL 컬럼 추가
+        if "profile_image_url" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN profile_image_url TEXT"))
+        
+        # 자기소개 컬럼 추가
+        if "bio" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN bio TEXT"))
+        
+        # 전화번호 컬럼 추가
+        if "phone" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN phone TEXT"))
+        
+        # 전문 분야 컬럼 추가
+        if "specialization" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN specialization TEXT"))
+        
+        # updated_at 컬럼 추가
+        if "updated_at" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN updated_at DATETIME"))
     except Exception as e:
         # 마이그레이션 실패해도 계속 진행 (컬럼이 이미 있을 수 있음)
         import logging
         logger = logging.getLogger(__name__)
-        logger.debug(f"Category column migration: {e}")
-
-
-def _migrate_add_chapter_columns() -> None:
-    """Course 테이블에 챕터 관련 컬럼 추가 (마이그레이션)"""
-    try:
-        from sqlalchemy import inspect, text
-        
-        # SQLite인지 확인
-        if engine.dialect.name != "sqlite":
-            return
-        
-        # 테이블이 존재하는지 확인
-        inspector = inspect(engine)
-        if "course" not in inspector.get_table_names():
-            return
-        
-        columns = [col["name"] for col in inspector.get_columns("course")]
-        
-        # parent_course_id 컬럼 추가
-        if "parent_course_id" not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE course ADD COLUMN parent_course_id VARCHAR"))
-        
-        # chapter_number 컬럼 추가
-        if "chapter_number" not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE course ADD COLUMN chapter_number INTEGER"))
-        
-        # total_chapters 컬럼 추가
-        if "total_chapters" not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE course ADD COLUMN total_chapters INTEGER"))
-    except Exception as e:
-        # 마이그레이션 실패해도 계속 진행 (컬럼이 이미 있을 수 있음)
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Chapter columns migration: {e}")
+        logger.debug(f"Instructor profile columns migration: {e}")
 
 
 def init_db() -> None:
@@ -141,10 +127,8 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     # 기존 테이블에 progress 컬럼 추가 (마이그레이션)
     _migrate_add_progress_column()
-    # 기존 테이블에 category 컬럼 추가 (마이그레이션)
-    _migrate_add_category_column()
-    # 기존 테이블에 챕터 관련 컬럼 추가 (마이그레이션)
-    _migrate_add_chapter_columns()
+    # Instructor 테이블에 프로필 컬럼 추가 (마이그레이션)
+    _migrate_add_instructor_profile_columns()
 
 
 def get_session() -> Generator[Session, None, None]:
