@@ -20,7 +20,13 @@ class Instructor(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: Optional[str] = None
     email: Optional[str] = None
+    password_hash: Optional[str] = Field(default=None, description="비밀번호 해시")
+    profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
+    bio: Optional[str] = Field(default=None, description="자기소개")
+    phone: Optional[str] = Field(default=None, description="전화번호")
+    specialization: Optional[str] = Field(default=None, description="전문 분야")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     courses: list["Course"] = Relationship(back_populates="instructor")
 

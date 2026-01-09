@@ -55,8 +55,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.rate_limiter.window_seconds = window_seconds
     
     async def dispatch(self, request: Request, call_next):
-        # 헬스체크는 제외
-        if request.url.path in ["/api/health", "/health", "/", "/docs", "/openapi.json"]:
+        # 헬스체크 및 상태 조회는 제외
+        excluded_paths = ["/api/health", "/health", "/", "/docs", "/openapi.json"]
+        # /api/status/{course_id} 패턴도 제외 (상태 조회는 자주 호출되므로)
+        if request.url.path in excluded_paths or request.url.path.startswith("/api/status/"):
             return await call_next(request)
         
         # Rate limit key 생성 (IP 주소 또는 사용자 ID)

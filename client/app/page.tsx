@@ -1,12 +1,46 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { BookOpen, Upload, GraduationCap, PlayCircle } from "lucide-react";
+import { isAuthenticated, getUser } from "@/lib/auth";
 
 export default function Home() {
+  const [isInstructor, setIsInstructor] = useState(false);
+
+  useEffect(() => {
+    // 인증 상태 확인 및 강사 여부 체크
+    if (isAuthenticated()) {
+      const user = getUser();
+      setIsInstructor(user?.role === "instructor");
+    } else {
+      setIsInstructor(false);
+    }
+
+    // storage 이벤트 리스너 (다른 탭에서 로그인/로그아웃 시 동기화)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "yeopgang_access_token" || e.key === "yeopgang_user") {
+        if (isAuthenticated()) {
+          const user = getUser();
+          setIsInstructor(user?.role === "instructor");
+        } else {
+          setIsInstructor(false);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, []);
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       <div className="mx-auto max-w-6xl px-6 py-16">
-        {/* 헤더 */}
-        <header className="mb-16 text-center">
+        {/* 메인 타이틀 */}
+        <div className="mb-16 text-center">
           <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-blue-100 px-4 py-1.5 text-sm font-medium text-blue-700">
             <BookOpen className="h-4 w-4" />
             <span>옆강</span>
@@ -17,25 +51,28 @@ export default function Home() {
           <p className="mx-auto max-w-2xl text-lg text-slate-600">
             강의 영상을 업로드하고 AI 튜터와 함께 학습하세요.
           </p>
-      </header>
+        </div>
 
         {/* 메인 액션 버튼 */}
         <div className="mb-20 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-        <Link
-          href="/instructor/upload"
-            className="group flex items-center gap-3 rounded-xl bg-blue-600 px-8 py-4 text-base font-semibold text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl"
-        >
-            <Upload className="h-5 w-5" />
-            <span>강의 업로드</span>
-        </Link>
-        <Link
-          href="/student"
+          {/* 강사 로그인 시에만 강의 업로드 버튼 표시 */}
+          {isInstructor && (
+            <Link
+              href="/instructor/upload"
+              className="group flex items-center gap-3 rounded-xl bg-blue-600 px-8 py-4 text-base font-semibold text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl"
+            >
+              <Upload className="h-5 w-5" />
+              <span>강의 업로드</span>
+            </Link>
+          )}
+          <Link
+            href="/student"
             className="group flex items-center gap-3 rounded-xl border-2 border-slate-300 bg-white px-8 py-4 text-base font-semibold text-slate-700 transition-all hover:border-blue-500 hover:bg-blue-50"
-        >
+          >
             <GraduationCap className="h-5 w-5" />
             <span>강의 목록 보기</span>
-        </Link>
-      </div>
+          </Link>
+        </div>
 
         {/* 기능 소개 */}
         <div className="grid gap-6 md:grid-cols-3">
@@ -76,7 +113,7 @@ export default function Home() {
         </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 }
 

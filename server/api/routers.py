@@ -20,11 +20,20 @@ from api.schemas import (
     QuizResponse,
     QuizSubmitRequest,
     QuizResult,
+    RegisterInstructorRequest,
+    LoginRequest,
+    TokenResponse,
 )
+from datetime import datetime
 from core.db import get_session
 from core.models import Course, CourseStatus, Instructor, Video
 from core.storage import save_course_assets
 from core.tasks import enqueue_processing_task
+from core.dh_auth import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+)
 from ai.config import AISettings
 
 router = APIRouter(prefix="", tags=["api"])
@@ -107,6 +116,178 @@ def _serve_video_with_range(file_path: Path, media_type: str, request: Request =
             media_type=media_type,
             headers=headers,
         )
+
+
+# ==================== 인증 엔드포인트 ====================
+
+@router.post("/auth/register/instructor", response_model=TokenResponse)
+async def register_instructor(
+    payload: RegisterInstructorRequest,
+    session: Session = Depends(get_session),
+) -> TokenResponse:
+    """강사 등록 - 프로필 정보와 함께 강사 계정 생성"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info(f"강사 회원가입 시도: ID={payload.id}, Email={payload.email}")
+        
+        # 기존 강사 확인 (ID 또는 이메일 중복 체크)
+        existing_by_id = session.get(Instructor, payload.id)
+        if existing_by_id:
+            logger.warning(f"강사 ID 중복: {payload.id}")
+            raise HTTPException(
+                status_code=400,
+                detail="이미 존재하는 강사 ID입니다.",
+            )
+        
+        # 이메일 중복 확인
+        existing_by_email = session.exec(
+            select(Instructor).where(Instructor.email == payload.email)
+        ).first()
+        if existing_by_email:
+            logger.warning(f"이메일 중복: {payload.email}")
+            raise HTTPException(
+                status_code=400,
+                detail="이미 등록된 이메일입니다.",
+            )
+        
+        # 비밀번호 해싱
+        try:
+            password_hash = get_password_hash(payload.password)
+        except Exception as e:
+            logger.error(f"비밀번호 해싱 실패: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="비밀번호 처리 중 오류가 발생했습니다.",
+            )
+        
+        # 강사 생성 (프로필 정보 포함)
+        try:
+            instructor = Instructor(
+                id=payload.id,
+                name=payload.name,
+                email=payload.email,
+                password_hash=password_hash,
+                profile_image_url=payload.profile_image_url,
+                bio=payload.bio,
+                phone=payload.phone,
+                specialization=payload.specialization,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            session.add(instructor)
+            session.commit()
+            session.refresh(instructor)
+            logger.info(f"강사 생성 성공: ID={instructor.id}")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"강사 생성 실패: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"강사 등록 중 오류가 발생했습니다: {str(e)}",
+            )
+        
+        # 초기 강의 정보가 있으면 함께 등록
+        if payload.initial_courses:
+            try:
+                for course_info in payload.initial_courses:
+                    course_id = course_info.get("course_id") or course_info.get("id")
+                    course_title = course_info.get("title") or course_info.get("name")
+                    if course_id and course_title:
+                        course = Course(
+                            id=course_id,
+                            instructor_id=instructor.id,
+                            title=course_title,
+                            status=CourseStatus.processing,
+                            created_at=datetime.utcnow(),
+                            updated_at=datetime.utcnow(),
+                        )
+                        session.add(course)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"강의 등록 실패: {e}")
+                # 강의 등록 실패해도 강사 등록은 성공한 것으로 처리
+        
+        # JWT 토큰 생성
+        try:
+            token = create_access_token(
+                data={"sub": instructor.id, "role": "instructor"}
+            )
+        except Exception as e:
+            logger.error(f"토큰 생성 실패: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="토큰 생성 중 오류가 발생했습니다.",
+            )
+        
+        logger.info(f"강사 회원가입 완료: ID={instructor.id}")
+        return TokenResponse(
+            access_token=token,
+            user_id=instructor.id,
+            role="instructor",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"예상치 못한 오류: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"서버 오류가 발생했습니다: {str(e)}",
+        )
+
+
+@router.post("/auth/login", response_model=TokenResponse)
+async def login(
+    payload: LoginRequest,
+    session: Session = Depends(get_session),
+) -> TokenResponse:
+    """로그인 - ID와 비밀번호로 인증"""
+    if payload.role == "instructor":
+        user = session.get(Instructor, payload.user_id)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - User not found",
+            )
+        
+        # 비밀번호 검증
+        if not hasattr(user, "password_hash") or not user.password_hash:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - Password not set",
+            )
+        
+        if not verify_password(payload.password, user.password_hash):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - Wrong password",
+            )
+    elif payload.role == "student":
+        from core.dh_models import Student
+        user = session.get(Student, payload.user_id)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - User not found",
+            )
+        # 학생 비밀번호 검증은 향후 구현 예정
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid role. Must be 'instructor' or 'student'",
+        )
+    
+    token = create_access_token(
+        data={"sub": user.id, "role": payload.role}
+    )
+    
+    return TokenResponse(
+        access_token=token,
+        user_id=user.id,
+        role=payload.role,
+    )
 
 
 @router.get("/health")
