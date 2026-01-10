@@ -4,8 +4,9 @@
 - 멀티 테넌트 관련 스키마
 """
 from typing import Literal, Optional
+import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # 기존 스키마들 import
 from api.schemas import (
@@ -37,7 +38,7 @@ class RegisterInstructorRequest(BaseModel):
     """강사 등록 요청"""
     id: str = Field(..., description="강사 ID")
     name: str = Field(..., description="이름")
-    email: EmailStr = Field(..., description="이메일")
+    email: str = Field(..., description="이메일")
     password: str = Field(..., min_length=8, description="비밀번호 (최소 8자)")
     profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
     bio: Optional[str] = Field(default=None, description="자기소개")
@@ -45,6 +46,38 @@ class RegisterInstructorRequest(BaseModel):
     specialization: Optional[str] = Field(default=None, description="전문 분야")
     # 회원가입 시 함께 등록할 수 있는 초기 강의 정보 (선택사항)
     initial_courses: Optional[list[dict]] = Field(default=None, description="초기 강의 정보 목록")
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        """간단한 이메일 형식 검증"""
+        if not v:
+            raise ValueError("이메일은 필수입니다.")
+        # 기본적인 이메일 형식 검증
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, v):
+            raise ValueError("올바른 이메일 형식이 아닙니다.")
+        return v
+
+
+class UpdateInstructorRequest(BaseModel):
+    """강사 프로필 수정 요청"""
+    name: Optional[str] = Field(default=None, description="이름")
+    email: Optional[str] = Field(default=None, description="이메일")
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
+        """이메일 형식 검증 (선택 필드)"""
+        if v is None:
+            return v
+        if not v.strip():
+            return None
+        # 기본적인 이메일 형식 검증
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, v):
+            raise ValueError("올바른 이메일 형식이 아닙니다.")
+        return v
 
 
 class RegisterStudentRequest(BaseModel):
@@ -97,4 +130,19 @@ class InstructorProfileResponse(BaseModel):
     created_at: str
     updated_at: str
     course_count: int = 0
+
+
+# 강의 관련 스키마
+class CreateCourseRequest(BaseModel):
+    """강의 생성 요청"""
+    course_id: str = Field(..., description="강의 ID")
+    title: Optional[str] = Field(default=None, description="강의 제목")
+    category: Optional[str] = Field(default=None, description="카테고리")
+    total_chapters: Optional[int] = Field(default=None, description="전체 강의 수")
+
+
+class UpdateCourseRequest(BaseModel):
+    """강의 수정 요청"""
+    title: Optional[str] = Field(default=None, description="강의 제목")
+    category: Optional[str] = Field(default=None, description="카테고리")
 
