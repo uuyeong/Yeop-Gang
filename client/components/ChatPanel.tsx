@@ -52,12 +52,104 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
         }
       );
 
-      const assistantMessage: ChatMessage = {
-        role: "assistant",
-        content: data.answer || "답변을 받을 수 없습니다.",
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
+      // 답변이 너무 길면 여러 말풍선으로 나누기
+      const answerText = data.answer || "답변을 받을 수 없습니다.";
+      
+      // 답변이 250자 이상이면 나누기 (더 적극적으로)
+      if (answerText.length > 250) {
+        // 먼저 빈 줄로 구분된 단락으로 나누기
+        const paragraphs = answerText.split(/\n\n+/);
+        
+        if (paragraphs.length > 1) {
+          // 빈 줄로 구분된 문단이 있으면 각 문단을 개별 메시지로 추가
+          paragraphs.forEach((paragraph) => {
+            const trimmedParagraph = paragraph.trim();
+            if (trimmedParagraph) {
+              // 문단이 250자 이상이면 문장 단위로 더 나누기
+              if (trimmedParagraph.length > 250) {
+                const sentences = trimmedParagraph.split(/([。.!?]\s*)/);
+                const chunks: string[] = [];
+                let currentChunk = "";
+                
+                for (let i = 0; i < sentences.length; i++) {
+                  const sentence = sentences[i];
+                  if (currentChunk.length + sentence.length + 1 < 250) {
+                    currentChunk += (sentence + (currentChunk ? " " : ""));
+                  } else {
+                    if (currentChunk.trim()) {
+                      chunks.push(currentChunk.trim());
+                    }
+                    currentChunk = sentence;
+                  }
+                }
+                if (currentChunk.trim()) {
+                  chunks.push(currentChunk.trim());
+                }
+                
+                // 나눈 청크들을 각각 메시지로 추가
+                chunks.forEach((chunk) => {
+                  const assistantMessage: ChatMessage = {
+                    role: "assistant",
+                    content: chunk,
+                  };
+                  setMessages((prev) => [...prev, assistantMessage]);
+                });
+              } else {
+                // 문단이 250자 이하면 그대로 추가
+                const assistantMessage: ChatMessage = {
+                  role: "assistant",
+                  content: trimmedParagraph,
+                };
+                setMessages((prev) => [...prev, assistantMessage]);
+              }
+            }
+          });
+        } else {
+          // 빈 줄이 없어도 250자 이상이면 문장 단위로 나누기
+          const sentences = answerText.split(/([。.!?]\s*)/);
+          const chunks: string[] = [];
+          let currentChunk = "";
+          
+          for (let i = 0; i < sentences.length; i++) {
+            const sentence = sentences[i];
+            if (currentChunk.length + sentence.length + 1 < 250) {
+              currentChunk += (sentence + (currentChunk ? " " : ""));
+            } else {
+              if (currentChunk.trim()) {
+                chunks.push(currentChunk.trim());
+              }
+              currentChunk = sentence;
+            }
+          }
+          if (currentChunk.trim()) {
+            chunks.push(currentChunk.trim());
+          }
+          
+          if (chunks.length > 1) {
+            chunks.forEach((chunk) => {
+              const assistantMessage: ChatMessage = {
+                role: "assistant",
+                content: chunk,
+              };
+              setMessages((prev) => [...prev, assistantMessage]);
+            });
+          } else {
+            // 나눌 수 없으면 그대로 추가
+            const assistantMessage: ChatMessage = {
+              role: "assistant",
+              content: answerText,
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          }
+        }
+      } else {
+        // 답변이 250자 이하면 그대로 추가
+        const assistantMessage: ChatMessage = {
+          role: "assistant",
+          content: answerText,
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
     } catch (error) {
       console.error("채팅 API 오류:", error);
       
@@ -86,18 +178,47 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
     }
   };
 
+  // 마크다운 문법 제거 함수
+  const removeMarkdown = (text: string): string => {
+    return text
+      // **볼드** 제거
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      // *이탤릭* 제거
+      .replace(/\*([^*]+)\*/g, '$1')
+      // __볼드__ 제거
+      .replace(/__([^_]+)__/g, '$1')
+      // _이탤릭_ 제거
+      .replace(/_([^_]+)_/g, '$1')
+      // # 헤딩 제거
+      .replace(/^#{1,6}\s+/gm, '')
+      // ~~취소선~~ 제거
+      .replace(/~~([^~]+)~~/g, '$1')
+      // `코드` 제거
+      .replace(/`([^`]+)`/g, '$1')
+      // [링크](url) 제거
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+      // 남은 마크다운 특수문자 제거
+      .replace(/\*\*/g, '')
+      .replace(/\*/g, '')
+      .replace(/__/g, '')
+      .replace(/_/g, '');
+  };
+
   // 타임스탬프 파싱 및 렌더링 함수
   const parseAndRenderContent = (content: string) => {
+    // 마크다운 문법 제거
+    const cleanContent = removeMarkdown(content);
+    
     // 타임스탬프 패턴: [파일명 @ 숫자s] 또는 @ 숫자s
     const timestampPattern = /(?:\[[^\]]*@\s*(\d+(?:\.\d+)?)s\]|@\s*(\d+(?:\.\d+)?)s)/g;
     const parts: (string | { type: "timestamp"; time: number; text: string })[] = [];
     let lastIndex = 0;
     let match;
 
-    while ((match = timestampPattern.exec(content)) !== null) {
+    while ((match = timestampPattern.exec(cleanContent)) !== null) {
       // 타임스탬프 이전 텍스트 추가
       if (match.index > lastIndex) {
-        parts.push(content.substring(lastIndex, match.index));
+        parts.push(cleanContent.substring(lastIndex, match.index));
       }
 
       // 타임스탬프 추출 (첫 번째 그룹 또는 두 번째 그룹)
@@ -119,11 +240,11 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
     }
 
     // 마지막 텍스트 추가
-    if (lastIndex < content.length) {
-      parts.push(content.substring(lastIndex));
+    if (lastIndex < cleanContent.length) {
+      parts.push(cleanContent.substring(lastIndex));
     }
 
-    return parts.length > 0 ? parts : [content];
+    return parts.length > 0 ? parts : [cleanContent];
   };
 
   const handleTimestampClick = (timeInSeconds: number) => {
@@ -157,21 +278,32 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
         ref={messagesContainerRef}
         className="flex-1 space-y-2 overflow-y-auto px-3 py-3 bg-slate-100"
       >
-        {transcript.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex items-end gap-2 ${
-              msg.role === "user" ? "flex-row-reverse" : ""
-            }`}
-          >
-            {/* 프로필 이미지 (봇만) */}
-            {msg.role === "assistant" && (
-              <img
-                src="https://i.ibb.co/27yY0pLS/default-profile.png"
-                alt="옆강 봇"
-                className="h-7 w-7 rounded-full object-cover flex-shrink-0"
-              />
-            )}
+        {transcript.map((msg, idx) => {
+          // 연속된 assistant 메시지 중 첫 번째만 프로필 표시
+          const isFirstAssistantInGroup = 
+            msg.role === "assistant" && (
+              idx === 0 || 
+              transcript[idx - 1].role !== "assistant"
+            );
+          
+          return (
+            <div
+              key={msg.id}
+              className={`flex items-end gap-2 ${
+                msg.role === "user" ? "flex-row-reverse" : ""
+              }`}
+            >
+              {/* 프로필 이미지 (봇만, 연속된 메시지 그룹의 첫 번째만) */}
+              {isFirstAssistantInGroup && (
+                <img
+                  src="https://i.ibb.co/27yY0pLS/default-profile.png"
+                  alt="옆강 봇"
+                  className="h-7 w-7 rounded-full object-cover flex-shrink-0"
+                />
+              )}
+              {!isFirstAssistantInGroup && msg.role === "assistant" && (
+                <div className="h-7 w-7 flex-shrink-0" /> // 공간 유지용 빈 div
+              )}
             
             {/* 말풍선 */}
             <div
@@ -206,12 +338,13 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
                 </div>
               ) : (
                 <div className="text-sm text-white">
-                  {msg.content}
+                  {removeMarkdown(msg.content)}
                 </div>
               )}
             </div>
           </div>
-        ))}
+        );
+        })}
         
         {/* 로딩 인디케이터 */}
         {isLoading && (

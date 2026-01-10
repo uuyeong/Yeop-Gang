@@ -21,11 +21,14 @@ from api.dh_schemas import (
     LoginRequest,
     TokenResponse,
     RegisterInstructorRequest,
+    UpdateInstructorRequest,
     RegisterStudentRequest,
     EnrollCourseRequest,
     EnrollCourseResponse,
     SafeChatResponse,
     InstructorProfileResponse,
+    CreateCourseRequest,
+    UpdateCourseRequest,
 )
 from core.db import get_session
 from core.dh_auth import (
@@ -809,6 +812,69 @@ async def ask(
     if not hasattr(ask, '_conversation_history'):
         setattr(ask, '_conversation_history', {})
     history = getattr(ask, '_conversation_history', {}).get(conversation_id, [])
+    
+    # 질문 분석: 인사말인지, 긍정적 피드백인지 확인
+    question_lower = payload.question.lower().strip()
+    question_trimmed = payload.question.strip()
+    
+    # 인사말 키워드 (간단한 인사만, 불필요한 설명 없이)
+    greeting_keywords = [
+        "안녕", "안녕하세요", "안녕하셔", "안녕하십니까",
+        "쌤 안녕", "쌤안녕", "선생님 안녕", "선생님안녕",
+        "하이", "hi", "hello"
+    ]
+    is_greeting = any(kw in question_lower for kw in greeting_keywords) and len(question_trimmed) < 20
+    
+    # 인사말이면 간단하게만 답변
+    if is_greeting:
+        answer = "안녕하세요! 궁금한 점이 있으면 언제든지 물어보세요. 😊"
+        
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 20:
+            history = history[-20:]
+        getattr(ask, '_conversation_history', {})[conversation_id] = history
+        
+        return SafeChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+            is_safe=True,
+            filtered=False,
+        )
+    
+    # 긍정적 피드백 키워드 (간단하게 답변, API 호출 없이 템플릿 응답)
+    positive_feedback_keywords = [
+        "이해가 가", "이해가 되", "알았", "알겠", "이해했", "이해됐", 
+        "이해했어", "알겠어", "이해됐어", "이해가 돼", "이해가 되네",
+        "좋아", "좋아요", "감사", "고마워", "고마워요", "네", "응", "예",
+        "이제 알았", "이제 알겠", "이제 이해했", "이제 이해했어", "이제 이해됐",
+        "아하 이해", "아하 알았", "아하 알겠", "이해됐어요", "이해가 됐어요",
+        "이해가 됐", "알겠어요", "알았어요", "이해했어요"
+    ]
+    is_positive_feedback = any(kw in question_lower for kw in positive_feedback_keywords)
+    
+    # 긍정적 피드백이면 API 호출 없이 바로 템플릿 응답 반환
+    if is_positive_feedback:
+        answer = "좋아요! 잘 이해하셨네요. 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
+        
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 20:
+            history = history[-20:]
+        getattr(ask, '_conversation_history', {})[conversation_id] = history
+        
+        return SafeChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+            is_safe=True,
+            filtered=False,
+        )
     
     # RAG 쿼리 실행
     result = pipeline.query(

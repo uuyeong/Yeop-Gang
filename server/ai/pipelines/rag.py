@@ -100,7 +100,8 @@ class RAGPipeline:
         *, 
         course_id: str, 
         k: int = 4,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        current_time: Optional[float] = None
     ) -> dict:
         """
         Retrieval with course_id filter + LLM synthesis.
@@ -118,11 +119,24 @@ class RAGPipeline:
                 query_embeddings = embed_texts([question], self.settings)
             except ValueError as e:
                 # API 할당량 초과 등 임베딩 생성 실패 시
+                error_msg = str(e)
+                if "할당량" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg.lower():
+                    detailed_msg = (
+                        "⚠️ OpenAI API 할당량이 초과되었습니다.\n\n"
+                        "해결 방법:\n"
+                        "1. OpenAI 대시보드(https://platform.openai.com/account/billing)에서 크레딧 잔액 확인\n"
+                        "2. 결제 정보 등록 및 크레딧 추가\n"
+                        "3. Rate Limits(https://platform.openai.com/account/limits) 확인\n\n"
+                        f"에러 상세: {error_msg}"
+                    )
+                else:
+                    detailed_msg = f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {error_msg}"
+                
                 return {
                     "question": question,
                     "documents": [],
                     "metadatas": [],
-                    "answer": f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {str(e)}",
+                    "answer": detailed_msg,
                 }
             results = self.collection.query(
                 query_embeddings=query_embeddings,
@@ -182,41 +196,71 @@ class RAGPipeline:
                 print(f"[RAG DEBUG] ⚠️ Could not check vector DB: {e}")
         
         # 페르소나를 명시적으로 별도 검색 (질문과 관계없이 항상 가져오기)
+        # ⚠️ query_texts를 사용하면 ChromaDB가 내부적으로 임베딩을 생성할 수 있으므로
+        # get() 메서드만 사용하여 불필요한 API 호출 방지
         persona_doc = None
         try:
-            # 방법 1: ID로 직접 가져오기 시도
-            try:
-                persona_results = self.collection.get(
-                    ids=[f"{course_id}-persona"],
-                    include=["documents", "metadatas"],
-                )
-                if persona_results.get("documents") and len(persona_results["documents"]) > 0:
-                    persona_doc = persona_results["documents"][0]
-                    print(f"[RAG DEBUG] ✅ 페르소나를 ID로 검색했습니다 (course_id={course_id})")
-            except Exception:
-                # 방법 2: where 필터로 검색 (get이 실패하면 query 사용)
-                persona_query = self.collection.query(
-                    query_texts=["persona"],  # 페르소나 검색용 더미 텍스트
-                    n_results=1,
-                    include=["documents", "metadatas"],
-                    where={"course_id": course_id, "type": "persona"},
-                )
-                if persona_query.get("documents") and len(persona_query["documents"]) > 0:
-                    persona_doc = persona_query["documents"][0][0]  # query는 2차원 배열 반환
-                    print(f"[RAG DEBUG] ✅ 페르소나를 where 필터로 검색했습니다 (course_id={course_id})")
-                else:
-                    print(f"[RAG DEBUG] ⚠️ 페르소나가 벡터 DB에 없습니다 (course_id={course_id})")
+            # ID로 직접 가져오기 (임베딩 생성 없음)
+            persona_results = self.collection.get(
+                ids=[f"{course_id}-persona"],
+                include=["documents", "metadatas"],
+            )
+            if persona_results.get("documents") and len(persona_results["documents"]) > 0:
+                persona_doc = persona_results["documents"][0]
+                print(f"[RAG DEBUG] ✅ 페르소나를 ID로 검색했습니다 (course_id={course_id}, 임베딩 호출 없음)")
+            else:
+                print(f"[RAG DEBUG] ⚠️ 페르소나가 벡터 DB에 없습니다 (course_id={course_id})")
         except Exception as e:
-            print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류: {e}")
+            # get()이 실패하면 (예: ID가 없거나 컬렉션 문제) 페르소나 없이 진행
+            print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류 (get 실패): {e}")
+            # ⚠️ query_texts를 사용하지 않음 - 불필요한 임베딩 API 호출 방지
         
-        # 검색 결과에서 페르소나 제거 (중복 방지)
+        # 검색 결과에서 페르소나 제거 및 시간 기반 필터링/정렬
         filtered_docs = []
         filtered_metas = []
+        doc_scores = []  # 시간 기반 점수 (가까울수록 높은 점수)
+        
         for i, doc in enumerate(docs):
             meta = metas[i] if i < len(metas) else {}
             if meta.get("type") != "persona":
+                # 시간 기반 점수 계산 (current_time이 있는 경우)
+                score = 0.0
+                if current_time is not None and current_time > 0:
+                    start_time = meta.get("start_time")
+                    end_time = meta.get("end_time")
+                    if start_time is not None or end_time is not None:
+                        # 현재 시간과의 거리 계산
+                        if start_time is not None and end_time is not None:
+                            # segment 범위 내에 있으면 높은 점수
+                            if start_time <= current_time <= end_time:
+                                score = 100.0
+                            else:
+                                # 거리에 따라 점수 감소
+                                mid_time = (start_time + end_time) / 2
+                                distance = abs(mid_time - current_time)
+                                score = max(0, 100.0 - distance / 10)  # 10초당 10점 감소
+                        elif start_time is not None:
+                            distance = abs(start_time - current_time)
+                            score = max(0, 100.0 - distance / 10)
+                        elif end_time is not None:
+                            distance = abs(end_time - current_time)
+                            score = max(0, 100.0 - distance / 10)
+                
                 filtered_docs.append(doc)
                 filtered_metas.append(meta)
+                doc_scores.append(score)
+        
+        # 시간 기반 점수가 있으면 정렬 (높은 점수부터)
+        if current_time is not None and current_time > 0 and any(s > 0 for s in doc_scores):
+            # 점수와 거리를 함께 고려하여 정렬
+            sorted_items = sorted(
+                zip(filtered_docs, filtered_metas, doc_scores),
+                key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
+                reverse=True
+            )
+            filtered_docs = [doc for doc, _, _ in sorted_items]
+            filtered_metas = [meta for _, meta, _ in sorted_items]
+            print(f"[RAG DEBUG] 📍 Time-based sorting applied (current_time={current_time}s), top score: {max(doc_scores) if doc_scores else 0:.1f}")
         
         answer = self._llm_answer(
             question, 
@@ -298,6 +342,9 @@ class RAGPipeline:
         
         sys_prompt = (
             f"{persona}\n\n"
+            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+            "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요. "
             "위 말투 지시사항을 정확히 따라 답변하세요.\n\n"
             f"{knowledge_instruction}\n\n"
             "답변 규칙:\n"
@@ -305,7 +352,8 @@ class RAGPipeline:
             "- 강의 컨텍스트에 없는 내용은 일반 지식으로 보완 가능하지만, 강의 내용임을 강조하세요.\n"
             "- 모르면 모른다고 말하세요.\n"
             "- 코스 범위 밖 질문은 답하지 않습니다.\n"
-            "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요."
+            "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
+            "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요."
         )
 
         # 메시지 구성 (대화 히스토리 포함)
