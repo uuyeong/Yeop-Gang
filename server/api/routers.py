@@ -594,13 +594,43 @@ def ask(
     # 질문 분석: 긍정적 피드백인지, 대화 히스토리 질문인지 확인
     question_lower = payload.question.lower()
     
-    # 긍정적 피드백 키워드 (간단하게 답변)
+    # 긍정적 피드백 키워드 (간단하게 답변, API 호출 없이 템플릿 응답)
     positive_feedback_keywords = [
         "이해가 가", "이해가 되", "알았", "알겠", "이해했", "이해됐", 
         "이해했어", "알겠어", "이해됐어", "이해가 돼", "이해가 되네",
-        "좋아", "좋아요", "감사", "고마워", "고마워요", "네", "응", "예"
+        "좋아", "좋아요", "감사", "고마워", "고마워요", "네", "응", "예",
+        "이제 알았", "이제 알겠", "이제 이해했", "이제 이해했어", "이제 이해됐"
     ]
     is_positive_feedback = any(kw in question_lower for kw in positive_feedback_keywords)
+    
+    # 긍정적 피드백이면 API 호출 없이 바로 템플릿 응답 반환
+    if is_positive_feedback:
+        # 대화 히스토리에 최근 assistant 답변이 있으면 그것을 참고하여 더 자연스럽게 응답
+        if history and len(history) > 0:
+            recent_assistant = next(
+                (msg.get("content", "") for msg in reversed(history[-5:]) if msg.get("role") == "assistant"),
+                None
+            )
+            if recent_assistant:
+                answer = "좋아요! 잘 이해하셨네요. 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
+            else:
+                answer = "좋아요! 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
+        else:
+            answer = "좋아요! 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
+        
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 50:
+            history = history[-50:]
+        _conversation_history[conversation_id] = history
+        
+        return ChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+        )
     
     # 대화 히스토리 관련 질문
     history_question_keywords = [
@@ -611,18 +641,30 @@ def ask(
     ]
     is_history_question = any(kw in question_lower for kw in history_question_keywords)
     
-    # 과거 질문 반복 확인
+    # 과거 질문 반복 확인 (API 호출 없이 이전 답변 재사용)
     is_repeated_question = False
+    previous_answer = None
     if history:
         # 최근 사용자 질문들과 비교
-        recent_user_questions = [
-            msg.get("content", "").lower() 
-            for msg in history[-10:] 
-            if msg.get("role") == "user"
-        ]
+        recent_user_questions = []
+        recent_answers = []
+        for i, msg in enumerate(history[-20:]):  # 최근 20개 메시지 확인
+            if msg.get("role") == "user":
+                recent_user_questions.append({
+                    "content": msg.get("content", "").lower(),
+                    "index": i
+                })
+            elif msg.get("role") == "assistant" and recent_user_questions:
+                # 이전 사용자 질문에 대한 답변
+                recent_answers.append({
+                    "question_index": recent_user_questions[-1]["index"],
+                    "answer": msg.get("content", "")
+                })
+        
         current_question_lower = question_lower
         # 유사도 체크 (간단한 포함 관계로)
-        for past_q in recent_user_questions:
+        for past_q_info in recent_user_questions:
+            past_q = past_q_info["content"]
             if past_q and len(past_q) > 5:  # 너무 짧은 질문은 제외
                 # 핵심 키워드 추출하여 비교
                 past_keywords = set([w for w in past_q.split() if len(w) > 2])
@@ -631,7 +673,30 @@ def ask(
                     similarity = len(past_keywords & current_keywords) / len(past_keywords | current_keywords)
                     if similarity > 0.5:  # 50% 이상 유사하면 반복 질문으로 간주
                         is_repeated_question = True
+                        # 해당 질문에 대한 이전 답변 찾기
+                        for answer_info in recent_answers:
+                            if answer_info["question_index"] == past_q_info["index"]:
+                                previous_answer = answer_info["answer"]
+                                break
                         break
+        
+        # 반복 질문이고 이전 답변이 있으면 API 호출 없이 재사용
+        if is_repeated_question and previous_answer:
+            answer = f"아, 이전에 물어보셨던 내용과 비슷하시네요! 이전 답변을 다시 드릴게요:\n\n{previous_answer}\n\n혹시 더 궁금한 점이 있으면 언제든지 물어보세요!"
+            
+            # 대화 히스토리 업데이트
+            history.append({"role": "user", "content": payload.question})
+            history.append({"role": "assistant", "content": answer})
+            if len(history) > 50:
+                history = history[-50:]
+            _conversation_history[conversation_id] = history
+            
+            return ChatResponse(
+                answer=answer,
+                sources=[],
+                conversation_id=conversation_id,
+                course_id=payload.course_id,
+            )
     
     # 시간 관련 질문인지 확인 (예: "지금 몇분대야", "현재 시간", "몇 분대")
     # 단순히 현재 시간만 물어보는 질문인지 확인 (이해 관련 질문 제외)
@@ -847,7 +912,9 @@ def ask(
                                 
                                 # transcript 기반 프롬프트 생성
                                 system_message = (
-                                    "당신은 강의 내용을 바탕으로 학생의 질문에 답변하는 AI 챗봇입니다.\n\n"
+                                    "당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                    "'여러분'이나 '학생' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                    "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
                                 )
                                 if current_time_info:
                                     system_message += (
@@ -859,32 +926,40 @@ def ask(
                                 # 질문 유형에 따라 프롬프트 조정
                                 is_time_based_question = use_transcript_first
                                 
-                                # 긍정적 피드백 처리
-                                if is_positive_feedback:
-                                    instruction = (
-                                        "학생이 이해했다고 긍정적인 피드백을 주고 있습니다. "
-                                        "간단하고 친절하게 응답하세요. 예: '좋아요! 잘 이해하셨네요. 궁금한 점이 있으면 언제든지 물어보세요.' "
-                                        "답변은 50자 이내로 간결하게 작성하세요."
+                                # 대화 히스토리 질문 처리 (API 호출 없이 히스토리에서 직접 답변 생성)
+                                if is_history_question:
+                                    # 히스토리에서 직접 요약 생성 (API 호출 없음)
+                                    if history:
+                                        # 최근 대화 요약
+                                        recent_conversations = []
+                                        for i, msg in enumerate(history[-10:]):
+                                            role = msg.get("role", "")
+                                            content = msg.get("content", "")
+                                            if role == "user":
+                                                recent_conversations.append(f"학생: {content}")
+                                            elif role == "assistant":
+                                                recent_conversations.append(f"챗봇: {content}")
+                                        
+                                        if recent_conversations:
+                                            answer = "지금까지 우리가 나눈 대화 내용은 다음과 같습니다:\n\n" + "\n\n".join(recent_conversations[-6:]) + "\n\n궁금한 점이 더 있으면 언제든지 물어보세요!"
+                                        else:
+                                            answer = "아직 대화 내용이 없습니다. 궁금한 점이 있으면 언제든지 물어보세요!"
+                                    else:
+                                        answer = "아직 대화 내용이 없습니다. 궁금한 점이 있으면 언제든지 물어보세요!"
+                                    
+                                    # 대화 히스토리 업데이트
+                                    history.append({"role": "user", "content": payload.question})
+                                    history.append({"role": "assistant", "content": answer})
+                                    if len(history) > 50:
+                                        history = history[-50:]
+                                    _conversation_history[conversation_id] = history
+                                    
+                                    return ChatResponse(
+                                        answer=answer,
+                                        sources=[],
+                                        conversation_id=conversation_id,
+                                        course_id=payload.course_id,
                                     )
-                                    # 긍정적 피드백은 max_tokens를 줄임
-                                    max_tokens_for_response = 100
-                                # 대화 히스토리 질문 처리
-                                elif is_history_question:
-                                    instruction = (
-                                        "학생이 지금까지의 대화 내용을 물어보고 있습니다. "
-                                        "대화 히스토리를 참고하여 학생과 챗봇이 어떤 대화를 나눴는지 요약해서 알려주세요. "
-                                        "간결하고 명확하게 답변하세요."
-                                    )
-                                    max_tokens_for_response = 500
-                                # 반복 질문 처리
-                                elif is_repeated_question:
-                                    instruction = (
-                                        "학생이 이전에 물어봤던 내용과 유사한 질문을 다시 하고 있습니다. "
-                                        "이를 인지하고 '아, 이전에 물어보셨던 내용과 비슷하시네요!'라고 언급한 후, "
-                                        "이전 답변을 참고하여 다시 설명해주세요. "
-                                        "답변은 친절하고 명확하게 작성하되, 너무 길지 않게 작성하세요."
-                                    )
-                                    max_tokens_for_response = 800
                                 elif is_time_based_question:
                                     # 학생의 질문이 이해 관련인지 확인
                                     is_understanding_question = any(kw in question_lower for kw in [
@@ -893,7 +968,10 @@ def ask(
                                     
                                     if is_understanding_question:
                                         instruction = (
-                                            "**중요**: 학생이 현재 시청 중인 시간대의 강의 내용을 이해하지 못해서 질문하고 있습니다. "
+                                            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                            "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
+                                            "학생이 현재 시청 중인 시간대의 강의 내용을 이해하지 못해서 질문하고 있습니다. "
                                             "위에 제공된 강의 전사 내용은 학생이 현재 시청 중인 시간대(또는 그 근처)의 내용입니다. "
                                             "**반드시 해당 시간대에서 설명된 내용을 바탕으로 답변해야 합니다.** "
                                             "단순히 현재 시간만 알려주지 말고, 해당 시간대에서 실제로 설명한 내용을 더 쉽고 명확하게 설명해주세요. "
@@ -903,7 +981,10 @@ def ask(
                                         )
                                     else:
                                         instruction = (
-                                            "**중요**: 학생이 현재 시청 중인 시간대의 강의 내용에 대해 질문하고 있습니다. "
+                                            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                            "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
+                                            "학생이 현재 시청 중인 시간대의 강의 내용에 대해 질문하고 있습니다. "
                                             "위에 제공된 강의 전사 내용은 학생이 현재 시청 중인 시간대(또는 그 근처)의 내용입니다. "
                                             "이 내용을 바탕으로 학생의 질문에 정확하고 친절하게 답변해주세요. "
                                             "답변은 명확하고 간결하게 작성하되, 답변이 너무 길어지면 적절히 나누어 설명하세요."
@@ -911,6 +992,9 @@ def ask(
                                     max_tokens_for_response = 1500
                                 else:
                                     instruction = (
+                                        "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                        "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                        "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
                                         "위 강의 내용을 바탕으로 질문에 답변하세요. "
                                         "강의 내용에서 직접 답을 찾을 수 있으면 그대로 사용하고, "
                                         "없으면 일반적인 지식으로 보완하되 강의 범위와 관련이 있음을 명시하세요. "
@@ -933,7 +1017,11 @@ def ask(
                                 if persona_prompt:
                                     system_content = persona_prompt
                                 else:
-                                    system_content = "당신은 강의 내용을 바탕으로 학생의 질문에 답변하는 AI 챗봇입니다."
+                                    system_content = (
+                                        "당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                        "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                        "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요."
+                                    )
                                 
                                 # 현재 시청 시간 정보를 system message에 추가
                                 if payload.current_time is not None and payload.current_time > 0:
@@ -977,8 +1065,8 @@ def ask(
                                     )
                                     answer = resp.choices[0].message.content
                                     
-                                    # 답변이 너무 길 경우 강력하게 나누기
-                                    if answer and len(answer) > 300:  # 300자 이상이면 나누기
+                                    # 답변이 너무 길 경우 강력하게 나누기 (항상 빈 줄로 구분)
+                                    if answer and len(answer) > 250:  # 250자 이상이면 나누기 (더 적극적으로)
                                         # 먼저 빈 줄로 구분된 문단으로 나누기
                                         paragraphs = answer.split('\n\n')
                                         
@@ -990,23 +1078,24 @@ def ask(
                                                 if not para:
                                                     continue
                                                 
-                                                # 문단이 300자 이상이면 문장 단위로 더 나누기
-                                                if len(para) > 300:
-                                                    # 마침표나 느낌표로 문장 나누기
+                                                # 문단이 250자 이상이면 문장 단위로 더 나누기
+                                                if len(para) > 250:
+                                                    # 마침표, 느낌표, 물음표로 문장 나누기
                                                     sentences = []
                                                     current_sentence = ""
                                                     for char in para:
                                                         current_sentence += char
-                                                        if char in ['。', '.', '!', '?']:
+                                                        if char in ['。', '.', '!', '?'] and len(current_sentence.strip()) > 10:
+                                                            # 문장이 최소 10자 이상일 때만 나누기
                                                             sentences.append(current_sentence.strip())
                                                             current_sentence = ""
                                                     if current_sentence.strip():
                                                         sentences.append(current_sentence.strip())
                                                     
-                                                    # 문장들을 적절히 묶어서 300자 이하로 만들기
+                                                    # 문장들을 적절히 묶어서 250자 이하로 만들기
                                                     current_chunk = ""
                                                     for sent in sentences:
-                                                        if len(current_chunk) + len(sent) < 300:
+                                                        if len(current_chunk) + len(sent) + 1 < 250:
                                                             current_chunk += (sent + " " if current_chunk else sent)
                                                         else:
                                                             if current_chunk:
@@ -1020,34 +1109,33 @@ def ask(
                                             if len(divided_parts) > 1:
                                                 answer = '\n\n'.join(divided_parts)
                                         else:
-                                            # 문단이 하나면 문장 단위로 나누기
-                                            if len(answer) > 300:
-                                                # 마침표나 느낌표로 문장 나누기
-                                                sentences = []
-                                                current_sentence = ""
-                                                for char in answer:
-                                                    current_sentence += char
-                                                    if char in ['。', '.', '!', '?']:
-                                                        sentences.append(current_sentence.strip())
-                                                        current_sentence = ""
-                                                if current_sentence.strip():
+                                            # 문단이 하나면 문장 단위로 나누기 (더 적극적으로)
+                                            # 마침표, 느낌표, 물음표로 문장 나누기
+                                            sentences = []
+                                            current_sentence = ""
+                                            for char in answer:
+                                                current_sentence += char
+                                                if char in ['。', '.', '!', '?'] and len(current_sentence.strip()) > 10:
                                                     sentences.append(current_sentence.strip())
-                                                
-                                                # 문장들을 적절히 묶어서 300자 이하로 만들기
-                                                divided_parts = []
-                                                current_chunk = ""
-                                                for sent in sentences:
-                                                    if len(current_chunk) + len(sent) < 300:
-                                                        current_chunk += (sent + " " if current_chunk else sent)
-                                                    else:
-                                                        if current_chunk:
-                                                            divided_parts.append(current_chunk.strip())
-                                                        current_chunk = sent + " "
-                                                if current_chunk:
-                                                    divided_parts.append(current_chunk.strip())
-                                                
-                                                if len(divided_parts) > 1:
-                                                    answer = '\n\n'.join(divided_parts)
+                                                    current_sentence = ""
+                                            if current_sentence.strip():
+                                                sentences.append(current_sentence.strip())
+                                            
+                                            # 문장들을 적절히 묶어서 250자 이하로 만들기
+                                            divided_parts = []
+                                            current_chunk = ""
+                                            for sent in sentences:
+                                                if len(current_chunk) + len(sent) + 1 < 250:
+                                                    current_chunk += (sent + " " if current_chunk else sent)
+                                                else:
+                                                    if current_chunk:
+                                                        divided_parts.append(current_chunk.strip())
+                                                    current_chunk = sent + " "
+                                            if current_chunk:
+                                                divided_parts.append(current_chunk.strip())
+                                            
+                                            if len(divided_parts) > 1:
+                                                answer = '\n\n'.join(divided_parts)
                                     if not answer or not answer.strip():
                                         raise ValueError("Empty response from OpenAI")
                                     print(f"[CHAT DEBUG] ✅ Used transcript file for course_id={payload.course_id}, answer length: {len(answer)}")
