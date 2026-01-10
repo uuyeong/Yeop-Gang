@@ -52,12 +52,71 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
         }
       );
 
-      const assistantMessage: ChatMessage = {
-        role: "assistant",
-        content: data.answer || "답변을 받을 수 없습니다.",
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
+      // 답변이 너무 길면 여러 말풍선으로 나누기
+      const answerText = data.answer || "답변을 받을 수 없습니다.";
+      
+      // 답변이 300자 이상이고 빈 줄로 구분되어 있으면 나누기
+      if (answerText.length > 300 && answerText.includes('\n\n')) {
+        // 빈 줄로 구분된 단락들을 찾기
+        const paragraphs = answerText.split(/\n\n+/);
+        
+        // 각 단락을 개별 메시지로 추가
+        paragraphs.forEach((paragraph) => {
+          const trimmedParagraph = paragraph.trim();
+          if (trimmedParagraph) {
+            const assistantMessage: ChatMessage = {
+              role: "assistant",
+              content: trimmedParagraph,
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          }
+        });
+      } else if (answerText.length > 300) {
+        // 빈 줄이 없어도 300자 이상이면 문장 단위로 나누기 시도
+        // 마침표나 느낌표로 문장 나누기
+        const sentences = answerText.split(/([。.!?]\s*)/);
+        const chunks: string[] = [];
+        let currentChunk = "";
+        
+        for (let i = 0; i < sentences.length; i++) {
+          const sentence = sentences[i];
+          if (currentChunk.length + sentence.length < 300) {
+            currentChunk += sentence;
+          } else {
+            if (currentChunk.trim()) {
+              chunks.push(currentChunk.trim());
+            }
+            currentChunk = sentence;
+          }
+        }
+        if (currentChunk.trim()) {
+          chunks.push(currentChunk.trim());
+        }
+        
+        if (chunks.length > 1) {
+          chunks.forEach((chunk) => {
+            const assistantMessage: ChatMessage = {
+              role: "assistant",
+              content: chunk,
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          });
+        } else {
+          // 나눌 수 없으면 그대로 추가
+          const assistantMessage: ChatMessage = {
+            role: "assistant",
+            content: answerText,
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        }
+      } else {
+        // 답변이 짧거나 나눌 필요가 없으면 그대로 추가
+        const assistantMessage: ChatMessage = {
+          role: "assistant",
+          content: answerText,
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
     } catch (error) {
       console.error("채팅 API 오류:", error);
       
@@ -157,21 +216,32 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
         ref={messagesContainerRef}
         className="flex-1 space-y-2 overflow-y-auto px-3 py-3 bg-slate-100"
       >
-        {transcript.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex items-end gap-2 ${
-              msg.role === "user" ? "flex-row-reverse" : ""
-            }`}
-          >
-            {/* 프로필 이미지 (봇만) */}
-            {msg.role === "assistant" && (
-              <img
-                src="https://i.ibb.co/27yY0pLS/default-profile.png"
-                alt="옆강 봇"
-                className="h-7 w-7 rounded-full object-cover flex-shrink-0"
-              />
-            )}
+        {transcript.map((msg, idx) => {
+          // 연속된 assistant 메시지 중 첫 번째만 프로필 표시
+          const isFirstAssistantInGroup = 
+            msg.role === "assistant" && (
+              idx === 0 || 
+              transcript[idx - 1].role !== "assistant"
+            );
+          
+          return (
+            <div
+              key={msg.id}
+              className={`flex items-end gap-2 ${
+                msg.role === "user" ? "flex-row-reverse" : ""
+              }`}
+            >
+              {/* 프로필 이미지 (봇만, 연속된 메시지 그룹의 첫 번째만) */}
+              {isFirstAssistantInGroup && (
+                <img
+                  src="https://i.ibb.co/27yY0pLS/default-profile.png"
+                  alt="옆강 봇"
+                  className="h-7 w-7 rounded-full object-cover flex-shrink-0"
+                />
+              )}
+              {!isFirstAssistantInGroup && msg.role === "assistant" && (
+                <div className="h-7 w-7 flex-shrink-0" /> // 공간 유지용 빈 div
+              )}
             
             {/* 말풍선 */}
             <div
@@ -211,7 +281,8 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
               )}
             </div>
           </div>
-        ))}
+        );
+        })}
         
         {/* 로딩 인디케이터 */}
         {isLoading && (

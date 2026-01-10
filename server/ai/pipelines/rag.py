@@ -100,7 +100,8 @@ class RAGPipeline:
         *, 
         course_id: str, 
         k: int = 4,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        current_time: Optional[float] = None
     ) -> dict:
         """
         Retrieval with course_id filter + LLM synthesis.
@@ -214,14 +215,52 @@ class RAGPipeline:
             print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류 (get 실패): {e}")
             # ⚠️ query_texts를 사용하지 않음 - 불필요한 임베딩 API 호출 방지
         
-        # 검색 결과에서 페르소나 제거 (중복 방지)
+        # 검색 결과에서 페르소나 제거 및 시간 기반 필터링/정렬
         filtered_docs = []
         filtered_metas = []
+        doc_scores = []  # 시간 기반 점수 (가까울수록 높은 점수)
+        
         for i, doc in enumerate(docs):
             meta = metas[i] if i < len(metas) else {}
             if meta.get("type") != "persona":
+                # 시간 기반 점수 계산 (current_time이 있는 경우)
+                score = 0.0
+                if current_time is not None and current_time > 0:
+                    start_time = meta.get("start_time")
+                    end_time = meta.get("end_time")
+                    if start_time is not None or end_time is not None:
+                        # 현재 시간과의 거리 계산
+                        if start_time is not None and end_time is not None:
+                            # segment 범위 내에 있으면 높은 점수
+                            if start_time <= current_time <= end_time:
+                                score = 100.0
+                            else:
+                                # 거리에 따라 점수 감소
+                                mid_time = (start_time + end_time) / 2
+                                distance = abs(mid_time - current_time)
+                                score = max(0, 100.0 - distance / 10)  # 10초당 10점 감소
+                        elif start_time is not None:
+                            distance = abs(start_time - current_time)
+                            score = max(0, 100.0 - distance / 10)
+                        elif end_time is not None:
+                            distance = abs(end_time - current_time)
+                            score = max(0, 100.0 - distance / 10)
+                
                 filtered_docs.append(doc)
                 filtered_metas.append(meta)
+                doc_scores.append(score)
+        
+        # 시간 기반 점수가 있으면 정렬 (높은 점수부터)
+        if current_time is not None and current_time > 0 and any(s > 0 for s in doc_scores):
+            # 점수와 거리를 함께 고려하여 정렬
+            sorted_items = sorted(
+                zip(filtered_docs, filtered_metas, doc_scores),
+                key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
+                reverse=True
+            )
+            filtered_docs = [doc for doc, _, _ in sorted_items]
+            filtered_metas = [meta for _, meta, _ in sorted_items]
+            print(f"[RAG DEBUG] 📍 Time-based sorting applied (current_time={current_time}s), top score: {max(doc_scores) if doc_scores else 0:.1f}")
         
         answer = self._llm_answer(
             question, 
