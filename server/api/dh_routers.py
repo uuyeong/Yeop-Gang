@@ -25,9 +25,7 @@ from api.dh_schemas import (
     EnrollCourseRequest,
     EnrollCourseResponse,
     SafeChatResponse,
-    UpdateCourseRequest,
-    UpdateInstructorRequest,
-    CreateCourseRequest,
+    InstructorProfileResponse,
 )
 from core.db import get_session
 from core.dh_auth import (
@@ -37,6 +35,8 @@ from core.dh_auth import (
     require_any_user,
     verify_course_access,
     create_access_token,
+    get_password_hash,
+    verify_password,
 )
 from core.dh_guardrails import apply_guardrails
 from core.dh_models import Student, CourseEnrollment, EnrollmentStatus
@@ -61,23 +61,64 @@ async def register_instructor(
     payload: RegisterInstructorRequest,
     session: Session = Depends(get_session),
 ) -> TokenResponse:
-    """강사 등록"""
-    # 기존 강사 확인
-    existing = session.get(Instructor, payload.id)
-    if existing:
+    """강사 등록 - 프로필 정보와 함께 강사 계정 생성"""
+    from datetime import datetime
+    
+    # 기존 강사 확인 (ID 또는 이메일 중복 체크)
+    existing_by_id = session.get(Instructor, payload.id)
+    if existing_by_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Instructor already exists",
+            detail="Instructor ID already exists",
         )
     
-    # 강사 생성
+    # 이메일 중복 확인
+    existing_by_email = session.exec(
+        select(Instructor).where(Instructor.email == payload.email)
+    ).first()
+    if existing_by_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+    
+    # 비밀번호 해싱
+    password_hash = get_password_hash(payload.password)
+    
+    # 강사 생성 (프로필 정보 포함)
     instructor = Instructor(
         id=payload.id,
         name=payload.name,
         email=payload.email,
+        password_hash=password_hash,
+        profile_image_url=payload.profile_image_url,
+        bio=payload.bio,
+        phone=payload.phone,
+        specialization=payload.specialization,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
     session.add(instructor)
     session.commit()
+    session.refresh(instructor)
+    
+    # 초기 강의 정보가 있으면 함께 등록
+    if payload.initial_courses:
+        from core.models import Course, CourseStatus
+        for course_info in payload.initial_courses:
+            course_id = course_info.get("course_id") or course_info.get("id")
+            course_title = course_info.get("title") or course_info.get("name")
+            if course_id and course_title:
+                course = Course(
+                    id=course_id,
+                    instructor_id=instructor.id,
+                    title=course_title,
+                    status=CourseStatus.processing,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                session.add(course)
+        session.commit()
     
     # JWT 토큰 생성
     token = create_access_token(
@@ -131,7 +172,7 @@ async def login(
     payload: LoginRequest,
     session: Session = Depends(get_session),
 ) -> TokenResponse:
-    """로그인 (간단한 구현 - 사용자가 없으면 자동 생성)"""
+    """로그인 - ID와 비밀번호로 인증"""
     if payload.role == "instructor":
         user = session.get(Instructor, payload.user_id)
         # 강사가 없으면 자동으로 생성
@@ -159,12 +200,35 @@ async def login(
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid role",
+            detail="Invalid role. Must be 'instructor' or 'student'",
         )
     
-    # 실제로는 비밀번호 검증 필요
-    # if not verify_password(payload.password, user.hashed_password):
-    #     raise HTTPException(...)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials - User not found",
+        )
+    
+    # 강사의 경우 비밀번호 검증
+    if payload.role == "instructor":
+        if not hasattr(user, "password_hash") or not user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials - Password not set",
+            )
+        
+        if not verify_password(payload.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials - Wrong password",
+            )
+    
+    # 학생의 경우 비밀번호 검증 (향후 구현 예정)
+    # elif payload.role == "student":
+    #     if not hasattr(user, "password_hash") or not user.password_hash:
+    #         raise HTTPException(...)
+    #     if not verify_password(payload.password, user.password_hash):
+    #         raise HTTPException(...)
     
     token = create_access_token(
         data={"sub": user.id, "role": payload.role}
@@ -530,6 +594,38 @@ async def instructor_delete_course(
         "message": f"강의 '{course_id}'가 삭제되었습니다.",
         "course_id": course_id,
     }
+
+
+@router.get("/instructor/profile", response_model=InstructorProfileResponse)
+async def get_instructor_profile(
+    current_user: dict = Depends(require_instructor),
+    session: Session = Depends(get_session),
+) -> InstructorProfileResponse:
+    """강사 프로필 정보 조회 (자신의 프로필만)"""
+    instructor = session.get(Instructor, current_user["id"])
+    if not instructor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Instructor not found",
+        )
+    
+    # 강의 개수 조회
+    course_count = len(session.exec(
+        select(Course).where(Course.instructor_id == instructor.id)
+    ).all())
+    
+    return InstructorProfileResponse(
+        id=instructor.id,
+        name=instructor.name or "",
+        email=instructor.email or "",
+        profile_image_url=instructor.profile_image_url,
+        bio=instructor.bio,
+        phone=instructor.phone,
+        specialization=instructor.specialization,
+        created_at=instructor.created_at.isoformat() if instructor.created_at else "",
+        updated_at=instructor.updated_at.isoformat() if instructor.updated_at else "",
+        course_count=course_count,
+    )
 
 
 # ==================== 학생 전용 엔드포인트 ====================

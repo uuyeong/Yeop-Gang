@@ -36,9 +36,15 @@ class TokenResponse(BaseModel):
 class RegisterInstructorRequest(BaseModel):
     """강사 등록 요청"""
     id: str = Field(..., description="강사 ID")
-    name: Optional[str] = None
-    email: Optional[str] = None
-    password: str = Field(..., description="비밀번호")
+    name: str = Field(..., description="이름")
+    email: EmailStr = Field(..., description="이메일")
+    password: str = Field(..., min_length=8, description="비밀번호 (최소 8자)")
+    profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
+    bio: Optional[str] = Field(default=None, description="자기소개")
+    phone: Optional[str] = Field(default=None, description="전화번호")
+    specialization: Optional[str] = Field(default=None, description="전문 분야")
+    # 회원가입 시 함께 등록할 수 있는 초기 강의 정보 (선택사항)
+    initial_courses: Optional[list[dict]] = Field(default=None, description="초기 강의 정보 목록")
 
 
 class RegisterStudentRequest(BaseModel):
@@ -78,23 +84,17 @@ class SafeChatResponse(ChatResponse):
     filtered: bool = False
 
 
-# 강의/강사 수정 관련 스키마
-class UpdateCourseRequest(BaseModel):
-    """강의 정보 수정 요청"""
-    title: Optional[str] = None
-    category: Optional[str] = None
-
-
-class UpdateInstructorRequest(BaseModel):
-    """강사 정보 수정 요청"""
-    name: Optional[str] = None
-    email: Optional[str] = None
-
-
-class CreateCourseRequest(BaseModel):
-    """강의 목록 생성 요청 (파일 없이, 부모 강의만)"""
-    course_id: str = Field(..., description="강의 목록 ID")
-    title: Optional[str] = None
-    category: Optional[str] = None
-    total_chapters: Optional[int] = Field(None, description="전체 강의 수 (참고용)")
+# 강사 정보 조회 응답
+class InstructorProfileResponse(BaseModel):
+    """강사 프로필 정보 응답"""
+    id: str
+    name: str
+    email: str
+    profile_image_url: Optional[str] = None
+    bio: Optional[str] = None
+    phone: Optional[str] = None
+    specialization: Optional[str] = None
+    created_at: str
+    updated_at: str
+    course_count: int = 0
 
