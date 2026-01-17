@@ -30,7 +30,7 @@ from api.dh_schemas import (
     CreateCourseRequest,
     UpdateCourseRequest,
 )
-from core.db import get_session
+from core.db import get_session, engine
 from core.dh_auth import (
     get_current_user,
     require_instructor,
@@ -66,6 +66,10 @@ async def register_instructor(
 ) -> TokenResponse:
     """강사 등록 - 프로필 정보와 함께 강사 계정 생성"""
     from datetime import datetime
+    from core.db import init_db
+    
+    # 데이터베이스가 없으면 자동으로 생성
+    init_db()
     
     # 기존 강사 확인 (ID 또는 이메일 중복 체크)
     existing_by_id = session.get(Instructor, payload.id)
@@ -147,6 +151,10 @@ async def register_student(
     session: Session = Depends(get_session),
 ) -> TokenResponse:
     """학생 등록"""
+    from core.db import init_db
+    
+    # 데이터베이스가 없으면 자동으로 생성
+    init_db()
     # 기존 학생 확인
     existing = session.get(Student, payload.id)
     if existing:
@@ -355,15 +363,54 @@ async def instructor_upload(
     
     course = session.get(Course, course_id)
     if not course:
-        course = Course(
-            id=course_id,
-            instructor_id=instructor_id,
-            title=course_title.strip() if course_title.strip() else course_id,  # 제목이 없으면 course_id 사용
-            category=course_category.strip() if course_category and course_category.strip() else None,
-            parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
-            chapter_number=chapter_number,
-        )
-        session.add(course)
+        # Course 생성 시 is_public 컬럼이 있으면 기본값 설정
+        from sqlalchemy import inspect, text
+        try:
+            inspector = inspect(engine)
+            if "course" in inspector.get_table_names():
+                columns = [col["name"] for col in inspector.get_columns("course")]
+                has_is_public = "is_public" in columns
+            else:
+                has_is_public = False
+        except Exception:
+            has_is_public = False
+        
+        if has_is_public:
+            # is_public 컬럼이 있으면 SQL로 직접 INSERT
+            from datetime import datetime
+            session.execute(
+                text("""
+                    INSERT INTO course 
+                    (id, instructor_id, title, category, parent_course_id, chapter_number, status, progress, created_at, updated_at, is_public)
+                    VALUES 
+                    (:id, :instructor_id, :title, :category, :parent_course_id, :chapter_number, :status, :progress, :created_at, :updated_at, 1)
+                """),
+                {
+                    "id": course_id,
+                    "instructor_id": instructor_id,
+                    "title": course_title.strip() if course_title.strip() else course_id,
+                    "category": course_category.strip() if course_category and course_category.strip() else None,
+                    "parent_course_id": parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
+                    "chapter_number": chapter_number,
+                    "status": CourseStatus.processing.value,
+                    "progress": 0,
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }
+            )
+            session.flush()
+            course = session.get(Course, course_id)
+        else:
+            # is_public 컬럼이 없으면 일반 방식으로 생성
+            course = Course(
+                id=course_id,
+                instructor_id=instructor_id,
+                title=course_title.strip() if course_title.strip() else course_id,
+                category=course_category.strip() if course_category and course_category.strip() else None,
+                parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
+                chapter_number=chapter_number,
+            )
+            session.add(course)
     elif course.instructor_id != instructor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
