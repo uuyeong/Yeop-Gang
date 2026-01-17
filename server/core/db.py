@@ -70,6 +70,68 @@ def _migrate_add_progress_column() -> None:
         logger.debug(f"Progress column migration: {e}")
 
 
+def _migrate_add_course_columns() -> None:
+    """Course 테이블에 추가 컬럼 추가 (마이그레이션)"""
+    try:
+        from sqlalchemy import inspect, text
+        
+        # SQLite인지 확인
+        if engine.dialect.name != "sqlite":
+            return
+        
+        # 테이블이 존재하는지 확인
+        inspector = inspect(engine)
+        if "course" not in inspector.get_table_names():
+            return
+        
+        columns = [col["name"] for col in inspector.get_columns("course")]
+        column_info = {col["name"]: col for col in inspector.get_columns("course")}
+        
+        # category 컬럼 추가
+        if "category" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN category TEXT"))
+        
+        # total_chapters 컬럼 추가
+        if "total_chapters" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN total_chapters INTEGER"))
+        
+        # parent_course_id 컬럼 추가
+        if "parent_course_id" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN parent_course_id TEXT"))
+        
+        # chapter_number 컬럼 추가
+        if "chapter_number" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN chapter_number INTEGER"))
+        
+        # updated_at 컬럼 추가
+        if "updated_at" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN updated_at DATETIME"))
+        
+        # is_public 컬럼이 NOT NULL로 되어 있으면 기존 데이터에 기본값 설정
+        if "is_public" in columns:
+            try:
+                with engine.begin() as conn:
+                    # 기존 NULL 값이 있으면 1(True)로 설정
+                    result = conn.execute(text("UPDATE course SET is_public = 1 WHERE is_public IS NULL"))
+                    if result.rowcount > 0:
+                        print(f"[DB] ✅ is_public 컬럼에 기본값 설정: {result.rowcount}개 행 업데이트")
+            except Exception as e:
+                # 이미 값이 있거나 오류가 발생해도 계속 진행
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(f"is_public migration: {e}")
+    except Exception as e:
+        # 마이그레이션 실패해도 계속 진행 (컬럼이 이미 있을 수 있음)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Course columns migration: {e}")
+
+
 def _migrate_add_instructor_profile_columns() -> None:
     """Instructor 테이블에 프로필 관련 컬럼 추가 (마이그레이션)"""
     try:
@@ -124,9 +186,36 @@ def _migrate_add_instructor_profile_columns() -> None:
 
 def init_db() -> None:
     """Create tables if they do not exist."""
+    # 데이터베이스 파일 경로 출력
+    db_url = settings.database_url
+    if db_url.startswith("sqlite"):
+        # sqlite:/// 경로에서 실제 파일 경로 추출
+        from urllib.parse import urlparse
+        parsed = urlparse(db_url)
+        if parsed.path.startswith("///"):
+            db_file = Path(parsed.path[3:])
+        else:
+            db_file = Path(parsed.path)
+        if not db_file.is_absolute():
+            db_file = SERVER_ROOT / db_file
+        print(f"[DB] 데이터베이스 경로: {db_file}")
+        print(f"[DB] 데이터베이스 디렉토리 존재: {db_file.parent.exists()}")
+    
+    # 테이블 생성
     SQLModel.metadata.create_all(engine)
+    print(f"[DB] ✅ 데이터베이스 초기화 완료")
+    
+    # 데이터베이스 파일 생성 확인
+    if db_url.startswith("sqlite"):
+        if db_file.exists():
+            print(f"[DB] ✅ 데이터베이스 파일 생성됨: {db_file}")
+        else:
+            print(f"[DB] ⚠️ 데이터베이스 파일이 생성되지 않았습니다: {db_file}")
+    
     # 기존 테이블에 progress 컬럼 추가 (마이그레이션)
     _migrate_add_progress_column()
+    # Course 테이블에 추가 컬럼 추가 (마이그레이션)
+    _migrate_add_course_columns()
     # Instructor 테이블에 프로필 컬럼 추가 (마이그레이션)
     _migrate_add_instructor_profile_columns()
 

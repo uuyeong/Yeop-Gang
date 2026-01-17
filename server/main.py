@@ -3,6 +3,9 @@ from pathlib import Path
 import os
 import shutil
 
+# ChromaDB telemetry 비활성화 (가장 먼저 설정 - ChromaDB 모듈 import 전)
+os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -103,7 +106,8 @@ def create_app() -> FastAPI:
             print("⚠️ Warning: ffmpeg not found in PATH. Whisper STT may fail.")
             print("💡 Please install ffmpeg: https://ffmpeg.org/download.html")
         
-        # dh: 새로운 모델들도 초기화 (Student, CourseEnrollment)
+        # dh: 모든 모델을 import하여 SQLModel.metadata에 등록 (데이터베이스 생성에 필요)
+        from core.models import Instructor, Course, Video, ChatSession
         from core.dh_models import Student, CourseEnrollment
         init_db()
 
