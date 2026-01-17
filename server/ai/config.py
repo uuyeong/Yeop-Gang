@@ -28,6 +28,9 @@ class AISettings:
 
     def __post_init__(self):
         """Initialize fields from environment variables after instantiation."""
+        # ChromaDB telemetry 비활성화 (가장 먼저 설정)
+        os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
+        
         # Ensure .env is loaded (may have been loaded earlier, but ensure it's loaded)
         try:
             project_root = Path(__file__).resolve().parents[2]
@@ -42,6 +45,9 @@ class AISettings:
         except Exception as e:
             print(f"[DEBUG] ⚠️ Error loading .env: {e}")
             pass
+        
+        # Telemetry 비활성화 재확인 (env 파일 로드 후에도 유지)
+        os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
         
         # Read from environment (will use .env if loaded, or existing os.environ)
         # Only override if field has default value (not explicitly set)

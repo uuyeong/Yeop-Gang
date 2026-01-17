@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Upload, FileVideo, FileAudio, FileText, X, CheckCircle2, AlertCircle } from "lucide-react";
 import ProgressBar from "./ProgressBar";
 import { API_BASE_URL, apiGet, apiUpload, handleApiError } from "../lib/api";
+import { getToken } from "../lib/auth";
 
 type Props = {
   instructorId?: string;
@@ -157,14 +158,17 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
     setIsProcessing(true);
 
     try {
-      // 강사 토큰 가져오기
-      const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      // 강사 토큰 가져오기 (새로운 인증 시스템 사용)
+      const token = getToken();
       
       const options: RequestInit = {};
       if (token) {
         options.headers = {
           Authorization: `Bearer ${token}`,
         };
+      } else {
+        // 토큰이 없으면 오류 발생
+        throw new Error("로그인이 필요합니다. 토큰이 없습니다.");
       }
 
       const json = await apiUpload<{ course_id: string; instructor_id: string; status: string }>(

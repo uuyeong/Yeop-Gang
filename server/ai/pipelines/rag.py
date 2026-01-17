@@ -101,7 +101,8 @@ class RAGPipeline:
         course_id: str, 
         k: int = 4,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        current_time: Optional[float] = None
+        current_time: Optional[float] = None,
+        instructor_info: Optional[Dict[str, Any]] = None
     ) -> dict:
         """
         Retrieval with course_id filter + LLM synthesis.
@@ -268,7 +269,8 @@ class RAGPipeline:
             filtered_metas, 
             course_id,
             conversation_history=conversation_history,
-            persona_doc=persona_doc  # 명시적으로 페르소나 전달
+            persona_doc=persona_doc,  # 명시적으로 페르소나 전달
+            instructor_info=instructor_info  # 강사 정보 전달
         )
         return {
             "question": question,
@@ -284,7 +286,8 @@ class RAGPipeline:
         metas: List[Dict[str, Any]], 
         course_id: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        persona_doc: Optional[str] = None
+        persona_doc: Optional[str] = None,
+        instructor_info: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         LLM synthesis with persona prompt and conversation history.
@@ -325,11 +328,32 @@ class RAGPipeline:
         # DB에서 로드 실패 시 벡터 DB의 persona 사용 (우선순위 2)
         if not persona and persona_doc:
             persona = persona_doc
+            # 강사 정보가 있고 페르소나에 포함되지 않았을 수 있으므로 추가
+            if instructor_info:
+                instructor_context = ""
+                name = instructor_info.get("name", "")
+                bio = instructor_info.get("bio", "")
+                specialization = instructor_info.get("specialization", "")
+                
+                if name or specialization or bio:
+                    if name:
+                        instructor_context += f"강사 이름: {name}\n"
+                    if specialization:
+                        instructor_context += f"전문 분야: {specialization}\n"
+                    if bio:
+                        instructor_context += f"자기소개/배경: {bio}\n"
+                    
+                    if instructor_context and "강사 정보" not in persona:
+                        persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
             print(f"[RAG DEBUG] ✅ 벡터 DB의 페르소나 프롬프트 사용 (course_id={course_id})")
         elif not persona:
             # 페르소나 프롬프트를 찾지 못한 경우, 검색된 문서로 생성 (fallback, 우선순위 3)
             print(f"[RAG DEBUG] ⚠️ 저장된 페르소나를 찾지 못해 검색된 문서로 생성 (fallback, course_id={course_id})")
-            persona = self.generate_persona_prompt(course_id=course_id, sample_texts=docs)
+            persona = self.generate_persona_prompt(
+                course_id=course_id, 
+                sample_texts=docs,
+                instructor_info=instructor_info
+            )
         
         # Strict Grounding Rule (최상단에 명시)
         strict_grounding_rule = """**⚠️ Strict Grounding Rule (필수 준수):**
@@ -433,22 +457,51 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
                 return f"⚠️ LLM 응답 생성 중 오류 발생: {error_msg}"
 
     def generate_persona_prompt(
-        self, *, course_id: str, sample_texts: list[str]
+        self, *, course_id: str, sample_texts: list[str], instructor_info: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Analyze speaking style from sample texts and generate persona prompt.
         Uses LLM to extract stylistic patterns (speech patterns, tone, expressions).
+        Also incorporates instructor information from database (bio, specialization, name).
+        
+        Args:
+            course_id: Course identifier
+            sample_texts: List of sample texts from lectures
+            instructor_info: Optional dictionary with instructor information:
+                - name: Instructor name
+                - bio: Instructor biography/self-introduction
+                - specialization: Instructor's field of expertise
         """
+        # 강사 정보 구성
+        instructor_context = ""
+        if instructor_info:
+            name = instructor_info.get("name", "")
+            bio = instructor_info.get("bio", "")
+            specialization = instructor_info.get("specialization", "")
+            
+            if name:
+                instructor_context += f"강사 이름: {name}\n"
+            if specialization:
+                instructor_context += f"전문 분야: {specialization}\n"
+            if bio:
+                instructor_context += f"자기소개/배경: {bio}\n"
+        
         if not sample_texts:
-            return f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다."
+            base_prompt = f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다."
+            if instructor_context:
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}\n위 강사 정보를 바탕으로 답변하세요."
+            return base_prompt
         
         if OpenAI is None or not self.settings.openai_api_key:
             # Fallback to simple prompt if API key is missing
             sample = sample_texts[0][:500] if sample_texts else ""
-            return (
+            base_prompt = (
                 f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
                 f"아래 샘플을 참고하여 답변하세요:\n{sample}"
             )
+            if instructor_context:
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}"
+            return base_prompt
         
         # Combine sample texts (up to 3000 chars to avoid token limits)
         combined_text = "\n\n".join(sample_texts)
@@ -458,6 +511,11 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
         # Use LLM to analyze speaking style
         client = OpenAI(api_key=self.settings.openai_api_key)
         
+        # 강사 정보를 분석 프롬프트에 포함
+        instructor_section = ""
+        if instructor_context:
+            instructor_section = f"\n\n강사 정보:\n{instructor_context}\n위 강사 정보도 참고하여 말투와 배경지식을 분석하세요."
+        
         analysis_prompt = f"""다음은 강사의 강의 텍스트 샘플입니다. 이 강사의 말투와 스타일을 분석해주세요.
 
 분석할 요소:
@@ -466,6 +524,7 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
 3. 자주 사용하는 표현이나 습관적 말투
 4. 문장 구조 (짧은 문장 vs 긴 문장)
 5. 특징적인 말버릇이나 반복되는 표현
+6. 강사 정보를 바탕으로 한 배경지식과 전문성{instructor_section}
 
 강의 샘플:
 {combined_text}
@@ -476,6 +535,7 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
 - 자주 사용하는 표현: [분석 결과]
 - 문장 구조: [분석 결과]
 - 특징: [분석 결과]
+- 배경지식/전문성: [강사 정보를 바탕으로 한 배경지식]
 
 이 분석을 바탕으로 이 강사의 말투를 모방하는 방법을 요약해주세요."""
         
@@ -494,7 +554,11 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
             style_analysis = resp.choices[0].message.content
             
             # Generate persona prompt based on analysis
-            persona_instruction = f"""당신은 course_id={course_id} 강사의 말투와 스타일을 정확하게 모방하는 AI 챗봇입니다.
+            instructor_info_section = ""
+            if instructor_context:
+                instructor_info_section = f"\n\n강사 정보:\n{instructor_context}\n위 강사 정보를 바탕으로 배경지식과 전문성을 활용하여 답변하세요."
+            
+            persona_instruction = f"""당신은 course_id={course_id} 강사의 말투와 스타일을 정확하게 모방하는 AI 챗봇입니다.{instructor_info_section}
 
 강사 말투 분석:
 {style_analysis}
@@ -504,24 +568,31 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
 2. 분석된 어투를 일관되게 유지하세요
 3. 자주 사용하는 표현이나 특징적인 말버릇을 자연스럽게 사용하세요
 4. 문장 구조도 원본과 유사하게 작성하세요
-5. 강사의 개성과 특징을 반영하여 친근하고 자연스러운 말투로 답변하세요"""
+5. 강사의 개성과 특징을 반영하여 친근하고 자연스러운 말투로 답변하세요
+6. 강사의 배경지식과 전문성을 활용하여 정확하고 전문적인 답변을 제공하세요"""
             
             return persona_instruction
         except (RateLimitError, APIError) as e:
             error_msg = f"OpenAI API 오류 (페르소나 생성): {str(e)}"
             print(f"ERROR [Persona]: {error_msg}")
             sample = sample_texts[0][:500] if sample_texts else ""
-            return (
+            base_prompt = (
                 f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
                 f"페르소나 생성 중 오류가 발생했습니다: {error_msg}. "
                 f"아래 샘플을 참고하여 답변하세요:\n{sample}"
             )
+            if instructor_context:
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}"
+            return base_prompt
         except Exception as e:
             print(f"Warning: Failed to analyze persona style: {e}")
             # Fallback to simple prompt
             sample = sample_texts[0][:500] if sample_texts else ""
-            return (
+            base_prompt = (
                 f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
                 f"아래 샘플을 참고하여 답변하세요:\n{sample}"
             )
+            if instructor_context:
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}"
+            return base_prompt
 

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Trash2, AlertCircle, ArrowLeft, BookOpen, Clock, User, PlayCircle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { apiGet, apiDelete, handleApiError } from "../../lib/api";
+import { getUser } from "../../lib/auth";
 
 type Course = {
   id: string;
@@ -21,8 +22,13 @@ export default function StudentPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingCourseId, setDeletingCourseId] = useState<string | null>(null);
+  const [isInstructor, setIsInstructor] = useState(false);
 
   useEffect(() => {
+    // 강사 로그인 여부 확인
+    const user = getUser();
+    setIsInstructor(user?.role === "instructor");
+    
     fetchCourses();
   }, []);
 
@@ -35,8 +41,9 @@ export default function StudentPage() {
       setCourses(data);
     } catch (err) {
       console.error("강의 목록 조회 오류:", err);
-      const apiError = handleApiError(err);
-      setError(apiError.message);
+      // 오류는 콘솔에만 기록하고 화면에는 표시하지 않음
+      // const apiError = handleApiError(err);
+      // setError(apiError.message);
     } finally {
       setIsLoading(false);
     }
@@ -125,14 +132,16 @@ export default function StudentPage() {
           </p>
         </div>
           </div>
-          <div className="mt-4">
-        <Link
-          href="/instructor/upload"
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-blue-500 hover:bg-blue-50"
-        >
-              <span>새 강의 업로드</span>
-        </Link>
-          </div>
+          {isInstructor && (
+            <div className="mt-4">
+              <Link
+                href="/instructor/upload"
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-blue-500 hover:bg-blue-50"
+              >
+                <span>새 강의 업로드</span>
+              </Link>
+            </div>
+          )}
       </header>
 
       {isLoading && (
@@ -142,23 +151,6 @@ export default function StudentPage() {
         </div>
       )}
 
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-6">
-          <div className="mb-4 flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-600" />
-            <div className="flex-1">
-              <h3 className="mb-1 text-sm font-semibold text-red-900">오류 발생</h3>
-              <p className="text-sm text-red-700">{error}</p>
-            </div>
-          </div>
-          <button
-            onClick={fetchCourses}
-            className="w-full rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
-          >
-            다시 시도
-          </button>
-        </div>
-      )}
 
       {!isLoading && !error && (
         <>
@@ -168,13 +160,17 @@ export default function StudentPage() {
                 <BookOpen className="h-8 w-8" />
               </div>
               <h3 className="mb-2 text-lg font-semibold text-slate-900">등록된 강의가 없습니다</h3>
-              <p className="mb-6 text-sm text-slate-600">새로운 강의를 업로드하여 시작하세요</p>
-              <Link
-                href="/instructor/upload"
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700"
-              >
-                <span>강의 업로드하기</span>
-              </Link>
+              <p className="mb-6 text-sm text-slate-600">
+                {isInstructor ? "새로운 강의를 업로드하여 시작하세요" : "강의가 업로드되면 여기에 표시됩니다"}
+              </p>
+              {isInstructor && (
+                <Link
+                  href="/instructor/upload"
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                >
+                  <span>강의 업로드하기</span>
+                </Link>
+              )}
             </div>
           ) : (
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">

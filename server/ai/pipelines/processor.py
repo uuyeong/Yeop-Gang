@@ -22,6 +22,7 @@ def process_course_assets(
     pdf_path: Optional[Path] = None,
     smi_path: Optional[Path] = None,
     update_progress: Optional[Callable[[int, str], None]] = None,
+    instructor_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     백엔드 A: 자동화 파이프라인 오케스트레이션
@@ -404,10 +405,29 @@ def process_course_assets(
                     from ai.style_analyzer import create_persona_prompt
                     persona_dict = json.loads(persona_profile_json)
                     persona_prompt = create_persona_prompt(persona_dict)
+                    # instructor_info가 있으면 페르소나에 추가
+                    if instructor_info:
+                        instructor_context = ""
+                        name = instructor_info.get("name", "")
+                        bio = instructor_info.get("bio", "")
+                        specialization = instructor_info.get("specialization", "")
+                        
+                        if name or specialization or bio:
+                            if name:
+                                instructor_context += f"강사 이름: {name}\n"
+                            if specialization:
+                                instructor_context += f"전문 분야: {specialization}\n"
+                            if bio:
+                                instructor_context += f"자기소개/배경: {bio}\n"
+                            
+                            if instructor_context and "강사 정보" not in persona_prompt:
+                                persona_prompt = f"{persona_prompt}\n\n강사 정보:\n{instructor_context}"
                 else:
-                    # 기존 방식 (fallback)
+                    # 기존 방식 (fallback) - instructor_info 포함
                     persona_prompt = pipeline.generate_persona_prompt(
-                        course_id=course_id, sample_texts=texts
+                        course_id=course_id, 
+                        sample_texts=texts,
+                        instructor_info=instructor_info
                     )
                 
                 if update_progress:
