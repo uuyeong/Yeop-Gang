@@ -6,7 +6,7 @@ from fastapi.params import Form, File
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlmodel import Session, select
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 import os
 import re
 
@@ -48,6 +48,137 @@ PROJECT_ROOT = SERVER_ROOT.parent
 
 def get_pipeline(settings: AISettings = Depends(AISettings)) -> RAGPipeline:
     return RAGPipeline(settings)
+
+
+def _generate_persona_response(
+    user_message: str,
+    course_id: str,
+    session: Session,
+    pipeline: RAGPipeline,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    context: Optional[str] = None
+) -> str:
+    """
+    페르소나가 적용된 LLM 응답 생성 (인사말, 피드백, 오류 메시지 등에 사용)
+    
+    Args:
+        user_message: 사용자 메시지
+        course_id: 강의 ID
+        session: DB 세션
+        pipeline: RAG 파이프라인
+        conversation_history: 대화 히스토리 (선택)
+        context: 추가 컨텍스트 (선택)
+    
+    Returns:
+        페르소나가 적용된 응답 텍스트
+    """
+    try:
+        from ai.config import AISettings
+        from core.models import Course, Instructor
+        from ai.style_analyzer import create_persona_prompt
+        import json
+        
+        settings = AISettings()
+        
+        # 강사 정보 가져오기
+        instructor_info = None
+        course = session.get(Course, course_id)
+        if course:
+            instructor = session.get(Instructor, course.instructor_id)
+            if instructor:
+                instructor_info = {
+                    "name": instructor.name,
+                    "bio": instructor.bio,
+                    "specialization": instructor.specialization,
+                }
+        
+        # 페르소나 로드 (DB 우선)
+        persona = None
+        if course and course.persona_profile:
+            try:
+                persona_dict = json.loads(course.persona_profile)
+                persona = create_persona_prompt(persona_dict)
+                if instructor_info:
+                    instructor_context = ""
+                    if instructor_info.get("name"):
+                        instructor_context += f"강사 이름: {instructor_info['name']}\n"
+                    if instructor_info.get("specialization"):
+                        instructor_context += f"전문 분야: {instructor_info['specialization']}\n"
+                    if instructor_info.get("bio"):
+                        instructor_context += f"자기소개/배경: {instructor_info['bio']}\n"
+                    if instructor_context and "강사 정보" not in persona:
+                        persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
+            except Exception as e:
+                print(f"[PERSONA RESPONSE] ⚠️ 페르소나 로드 실패: {e}")
+        
+        # 페르소나가 없으면 기본 페르소나 사용
+        if not persona:
+            persona = (
+                "당신은 친근하고 전문적인 강사입니다. "
+                "학생들에게 자연스럽고 이해하기 쉽게 설명합니다."
+            )
+            if instructor_info:
+                instructor_context = ""
+                if instructor_info.get("name"):
+                    instructor_context += f"강사 이름: {instructor_info['name']}\n"
+                if instructor_info.get("specialization"):
+                    instructor_context += f"전문 분야: {instructor_info['specialization']}\n"
+                if instructor_info.get("bio"):
+                    instructor_context += f"자기소개/배경: {instructor_info['bio']}\n"
+                if instructor_context:
+                    persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
+        
+        # 시스템 프롬프트 구성
+        sys_prompt = (
+            f"{persona}\n\n"
+            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문이나 상황에 답변할 때, "
+            "강사로서 자연스럽고 친근하게 대화하세요. "
+            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+            "강의를 가르치는 선생님으로서 학생에게 말하는 톤으로 답변하세요.\n\n"
+            "답변 규칙:\n"
+            "- 강사로서 자연스럽고 친근한 말투를 사용하세요.\n"
+            "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
+            "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요."
+        )
+        
+        if context:
+            sys_prompt += f"\n\n추가 컨텍스트:\n{context}"
+        
+        # LLM 호출
+        if not settings.openai_api_key:
+            return "죄송합니다. OpenAI API 키가 설정되지 않았습니다."
+        
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+        
+        messages = [{"role": "system", "content": sys_prompt}]
+        
+        # 대화 히스토리 추가
+        if conversation_history:
+            recent_history = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+            for msg in recent_history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role in ["user", "assistant"] and content:
+                    messages.append({"role": role, "content": content})
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        response = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
+        )
+        
+        return response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
+        
+    except Exception as e:
+        print(f"[PERSONA RESPONSE] ❌ 오류: {e}")
+        import traceback
+        print(f"[PERSONA RESPONSE] Traceback: {traceback.format_exc()}")
+        # 오류 발생 시 기본 응답 (페르소나 없이)
+        return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
 
 
 def _serve_video_file(file_path: Path, media_type: str):
@@ -802,9 +933,15 @@ def ask(
     ]
     is_greeting = any(kw in question_lower for kw in greeting_keywords) and len(question_trimmed) < 20
     
-    # 인사말이면 간단하게만 답변
+    # 인사말이면 페르소나 적용된 답변 생성
     if is_greeting:
-        answer = "안녕하세요! 궁금한 점이 있으면 언제든지 물어보세요. 😊"
+        answer = _generate_persona_response(
+            user_message=f"학생이 '{payload.question}'라고 인사했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+            course_id=payload.course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=history
+        )
         
         # 대화 히스토리 업데이트
         history.append({"role": "user", "content": payload.question})
@@ -831,20 +968,26 @@ def ask(
     ]
     is_positive_feedback = any(kw in question_lower for kw in positive_feedback_keywords)
     
-    # 긍정적 피드백이면 API 호출 없이 바로 템플릿 응답 반환
+    # 긍정적 피드백이면 페르소나 적용된 답변 생성
     if is_positive_feedback:
-        # 대화 히스토리에 최근 assistant 답변이 있으면 그것을 참고하여 더 자연스럽게 응답
+        # 대화 히스토리에 최근 assistant 답변이 있으면 그것을 참고
+        context = None
         if history and len(history) > 0:
             recent_assistant = next(
                 (msg.get("content", "") for msg in reversed(history[-5:]) if msg.get("role") == "assistant"),
                 None
             )
             if recent_assistant:
-                answer = "좋아요! 잘 이해하셨네요. 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
-            else:
-                answer = "좋아요! 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
-        else:
-            answer = "좋아요! 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
+                context = f"최근에 제가 설명한 내용: {recent_assistant[:200]}"
+        
+        answer = _generate_persona_response(
+            user_message=f"학생이 '{payload.question}'라고 긍정적인 피드백을 주었습니다. 강사로서 기쁘게 반응하고, 더 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+            course_id=payload.course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=history,
+            context=context
+        )
         
         # 대화 히스토리 업데이트
         history.append({"role": "user", "content": payload.question})
@@ -908,9 +1051,15 @@ def ask(
                                 break
                         break
         
-        # 반복 질문이고 이전 답변이 있으면 API 호출 없이 재사용
+        # 반복 질문이고 이전 답변이 있으면 페르소나 적용된 답변 생성
         if is_repeated_question and previous_answer:
-            answer = f"아, 이전에 물어보셨던 내용과 비슷하시네요! 이전 답변을 다시 드릴게요:\n\n{previous_answer}\n\n혹시 더 궁금한 점이 있으면 언제든지 물어보세요!"
+            answer = _generate_persona_response(
+                user_message=f"학생이 이전에 물어본 내용과 비슷한 질문을 다시 했습니다: '{payload.question}'. 이전에 제가 설명한 내용은 다음과 같습니다: {previous_answer[:300]}. 강사로서 자연스럽게 이전 답변을 참고하여 다시 설명해주되, 더 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history
+            )
             
             # 대화 히스토리 업데이트
             history.append({"role": "user", "content": payload.question})
@@ -939,11 +1088,19 @@ def ask(
         is_time_question = has_time_keyword and not has_understanding_keyword
         
         if is_time_question:
-            # 시간 관련 질문이면 직접 답변
+            # 시간 관련 질문이면 페르소나 적용된 답변 생성
             minutes = int(payload.current_time // 60)
             seconds = int(payload.current_time % 60)
+            answer = _generate_persona_response(
+                user_message=f"학생이 현재 시청 중인 시간({minutes}분 {seconds}초)에 대해 물어봤습니다: '{payload.question}'. 강사로서 현재 시간을 알려주고, 해당 시간대의 강의 내용에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history,
+                context=f"현재 비디오 재생 시간: {minutes}분 {seconds}초"
+            )
             return ChatResponse(
-                answer=f"현재 {minutes}분 {seconds}초 부분을 시청 중이시군요! 😊\n\n해당 시간대의 강의 내용에 대해 궁금한 점이 있으시면 언제든지 물어보세요.",
+                answer=answer,
                 sources=[],
                 conversation_id=conversation_id,
                 course_id=payload.course_id,
@@ -1039,12 +1196,23 @@ def ask(
                     if use_transcript_first:
                         minutes = int(payload.current_time // 60) if payload.current_time else 0
                         seconds = int(payload.current_time % 60) if payload.current_time else 0
-                        answer = (
-                            f"죄송합니다. 현재 {minutes}분 {seconds}초 부분의 강의 자막 파일을 찾을 수 없습니다. "
-                            f"강의가 아직 처리 중이거나 자막 파일이 준비되지 않았을 수 있습니다."
+                        answer = _generate_persona_response(
+                            user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 자막 파일을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명하고, 강의가 아직 처리 중이거나 자막 파일이 준비되지 않았을 수 있다고 말해주세요.",
+                            course_id=payload.course_id,
+                            session=session,
+                            pipeline=pipeline,
+                            conversation_history=history,
+                            context=f"자막 파일 없음: {minutes}분 {seconds}초"
                         )
                     else:
-                        answer = "죄송합니다. 강의 자막 파일을 찾을 수 없습니다. 강의가 아직 처리 중일 수 있습니다."
+                        answer = _generate_persona_response(
+                            user_message="학생이 질문했지만 강의 자막 파일을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명하고, 강의가 아직 처리 중일 수 있다고 말해주세요.",
+                            course_id=payload.course_id,
+                            session=session,
+                            pipeline=pipeline,
+                            conversation_history=history,
+                            context="자막 파일 없음"
+                        )
                 else:
                     transcript_text = transcript_data.get("text", "") if isinstance(transcript_data, dict) else transcript_data or ""
                     segments = transcript_data.get("segments", []) if isinstance(transcript_data, dict) else []
@@ -1055,11 +1223,23 @@ def ask(
                         if use_transcript_first:
                             minutes = int(payload.current_time // 60) if payload.current_time else 0
                             seconds = int(payload.current_time % 60) if payload.current_time else 0
-                            answer = (
-                                f"죄송합니다. 현재 {minutes}분 {seconds}초 부분의 강의 자막 내용이 비어있습니다."
+                            answer = _generate_persona_response(
+                                user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 자막 내용이 비어있습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                course_id=payload.course_id,
+                                session=session,
+                                pipeline=pipeline,
+                                conversation_history=history,
+                                context=f"자막 내용 비어있음: {minutes}분 {seconds}초"
                             )
                         else:
-                            answer = "죄송합니다. 강의 자막 내용이 비어있습니다."
+                            answer = _generate_persona_response(
+                                user_message="학생이 질문했지만 강의 자막 내용이 비어있습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                course_id=payload.course_id,
+                                session=session,
+                                pipeline=pipeline,
+                                conversation_history=history,
+                                context="자막 내용 비어있음"
+                            )
                     else:
                         # transcript_text가 있는 경우 기존 로직 실행
                         # 현재 시청 시간대의 transcript segment 찾기
@@ -1115,11 +1295,23 @@ def ask(
                             if use_transcript_first:
                                 minutes = int(payload.current_time // 60) if payload.current_time else 0
                                 seconds = int(payload.current_time % 60) if payload.current_time else 0
-                                answer = (
-                                    f"죄송합니다. 현재 {minutes}분 {seconds}초 부분의 강의 내용을 찾을 수 없습니다."
+                                answer = _generate_persona_response(
+                                    user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 내용을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                    course_id=payload.course_id,
+                                    session=session,
+                                    pipeline=pipeline,
+                                    conversation_history=history,
+                                    context=f"강의 내용 없음: {minutes}분 {seconds}초"
                                 )
                             else:
-                                answer = "죄송합니다. 해당 시간대의 강의 내용을 찾을 수 없습니다."
+                                answer = _generate_persona_response(
+                                    user_message="학생이 질문했지만 해당 시간대의 강의 내용을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                    course_id=payload.course_id,
+                                    session=session,
+                                    pipeline=pipeline,
+                                    conversation_history=history,
+                                    context="강의 내용 없음"
+                                )
                         else:
                             # 저장된 transcript를 컨텍스트로 사용하여 다시 질의
                             from openai import OpenAI
@@ -1390,44 +1582,82 @@ def ask(
                                         # 시간 기반 질문인데 실패한 경우
                                         minutes = int(payload.current_time // 60) if payload.current_time else 0
                                         seconds = int(payload.current_time % 60) if payload.current_time else 0
-                                        answer = (
-                                            f"죄송합니다. 현재 {minutes}분 {seconds}초 부분의 강의 내용을 불러오는 중 문제가 발생했습니다. "
-                                            f"잠시 후 다시 질문해주시거나, 다른 질문을 해주세요."
+                                        answer = _generate_persona_response(
+                                            user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 내용을 불러오는 중 문제가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 질문해주시거나 다른 질문을 해달라고 말해주세요.",
+                                            course_id=payload.course_id,
+                                            session=session,
+                                            pipeline=pipeline,
+                                            conversation_history=history,
+                                            context=f"문제 발생: {minutes}분 {seconds}초"
                                         )
                                     else:
                                         # 일반 질문인데 실패한 경우
-                                        answer = "죄송합니다. 답변을 생성하는 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요."
+                                        answer = _generate_persona_response(
+                                            user_message="학생이 질문했지만 답변을 생성하는 중 문제가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                                            course_id=payload.course_id,
+                                            session=session,
+                                            pipeline=pipeline,
+                                            conversation_history=history,
+                                            context="답변 생성 문제"
+                                        )
                             else:
-                                # OPENAI_API_KEY가 없는 경우
-                                answer = "죄송합니다. OpenAI API 키가 설정되지 않았습니다."
+                                # OPENAI_API_KEY가 없는 경우 (페르소나 적용)
+                                answer = _generate_persona_response(
+                                    user_message="학생이 질문했지만 OpenAI API 키가 설정되지 않아 답변을 생성할 수 없습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                    course_id=payload.course_id,
+                                    session=session,
+                                    pipeline=pipeline,
+                                    conversation_history=history,
+                                    context="OpenAI API 키 미설정"
+                                )
             except Exception as e:
                 import traceback
                 error_msg = str(e)
                 print(f"[CHAT DEBUG] ❌ Exception in transcript loading: {error_msg}")
                 print(f"[CHAT DEBUG] Traceback: {traceback.format_exc()}")
-                # 예외 발생 시 기본 답변 제공
+                # 예외 발생 시 페르소나 적용된 오류 메시지 생성
                 if use_transcript_first:
                     minutes = int(payload.current_time // 60) if payload.current_time else 0
                     seconds = int(payload.current_time % 60) if payload.current_time else 0
-                    answer = (
-                        f"죄송합니다. 현재 {minutes}분 {seconds}초 부분의 강의 내용을 불러오는 중 오류가 발생했습니다. "
-                        f"잠시 후 다시 질문해주세요."
+                    answer = _generate_persona_response(
+                        user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 내용을 불러오는 중 오류가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 질문해달라고 말해주세요.",
+                        course_id=payload.course_id,
+                        session=session,
+                        pipeline=pipeline,
+                        conversation_history=history,
+                        context=f"오류 발생 위치: {minutes}분 {seconds}초"
                     )
                 else:
-                    answer = "죄송합니다. 강의 내용을 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+                    answer = _generate_persona_response(
+                        user_message="학생이 질문했지만 강의 내용을 불러오는 중 오류가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                        course_id=payload.course_id,
+                        session=session,
+                        pipeline=pipeline,
+                        conversation_history=history
+                    )
         
-        # answer가 비어있으면 기본 답변 제공
+        # answer가 비어있으면 페르소나 적용된 기본 답변 제공
         if not answer or not answer.strip():
             print(f"[CHAT DEBUG] ⚠️ Answer is empty, providing default response")
             if use_transcript_first and payload.current_time:
                 minutes = int(payload.current_time // 60)
                 seconds = int(payload.current_time % 60)
-                answer = (
-                    f"죄송합니다. 현재 {minutes}분 {seconds}초 부분에 대한 답변을 생성할 수 없었습니다. "
-                    f"다시 질문해주시거나 다른 질문을 해주세요."
+                answer = _generate_persona_response(
+                    user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분에 대한 답변을 생성할 수 없었습니다. 강사로서 정중하게 사과하고, 다시 질문해주시거나 다른 질문을 해달라고 말해주세요.",
+                    course_id=payload.course_id,
+                    session=session,
+                    pipeline=pipeline,
+                    conversation_history=history,
+                    context=f"답변 생성 실패 위치: {minutes}분 {seconds}초"
                 )
             else:
-                answer = "죄송합니다. 답변을 생성할 수 없었습니다. 다시 질문해주세요."
+                answer = _generate_persona_response(
+                    user_message="학생이 질문했지만 답변을 생성할 수 없었습니다. 강사로서 정중하게 사과하고, 다시 질문해달라고 말해주세요.",
+                    course_id=payload.course_id,
+                    session=session,
+                    pipeline=pipeline,
+                    conversation_history=history
+                )
         
         # 대화 히스토리에 현재 질문과 답변 추가
         history.append({"role": "user", "content": payload.question})
@@ -1450,11 +1680,25 @@ def ask(
         )
     except Exception as e:
         error_msg = str(e)
-        # OpenAI 할당량 에러 처리
+        # OpenAI 할당량 에러 처리 (페르소나 적용)
         if "할당량" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg:
-            answer = "⚠️ OpenAI API 할당량이 초과되었습니다. OpenAI 계정의 크레딧을 확인하거나 결제 정보를 업데이트하세요. https://platform.openai.com/account/billing"
+            answer = _generate_persona_response(
+                user_message="학생이 질문했지만 OpenAI API 할당량이 초과되었습니다. 강사로서 정중하게 상황을 설명하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history,
+                context="OpenAI API 할당량 초과 오류"
+            )
         else:
-            answer = f"⚠️ 오류 발생: {error_msg}"
+            answer = _generate_persona_response(
+                user_message=f"학생이 질문했지만 오류가 발생했습니다: {error_msg[:100]}. 강사로서 정중하게 사과하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history,
+                context=f"오류: {error_msg[:200]}"
+            )
         
         return ChatResponse(
             answer=answer,
