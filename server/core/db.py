@@ -70,6 +70,33 @@ def _migrate_add_progress_column() -> None:
         logger.debug(f"Progress column migration: {e}")
 
 
+def _migrate_add_course_persona_profile() -> None:
+    """Course 테이블에 persona_profile 컬럼 추가 (마이그레이션)"""
+    try:
+        from sqlalchemy import inspect, text
+        
+        # SQLite인지 확인
+        if engine.dialect.name != "sqlite":
+            return
+        
+        # 테이블이 존재하는지 확인
+        inspector = inspect(engine)
+        if "course" not in inspector.get_table_names():
+            return
+        
+        columns = [col["name"] for col in inspector.get_columns("course")]
+        
+        # persona_profile 컬럼 추가
+        if "persona_profile" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN persona_profile TEXT"))
+    except Exception as e:
+        # 마이그레이션 실패해도 계속 진행 (컬럼이 이미 있을 수 있음)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Course persona_profile column migration: {e}")
+
+
 def _migrate_add_instructor_profile_columns() -> None:
     """Instructor 테이블에 프로필 관련 컬럼 추가 (마이그레이션)"""
     try:
@@ -127,6 +154,8 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     # 기존 테이블에 progress 컬럼 추가 (마이그레이션)
     _migrate_add_progress_column()
+    # Course 테이블에 persona_profile 컬럼 추가 (마이그레이션)
+    _migrate_add_course_persona_profile()
     # Instructor 테이블에 프로필 컬럼 추가 (마이그레이션)
     _migrate_add_instructor_profile_columns()
 
