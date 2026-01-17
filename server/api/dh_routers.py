@@ -929,11 +929,24 @@ async def ask(
             filtered=False,
         )
     
+    # 강사 정보 가져오기
+    instructor_info = None
+    course = session.get(Course, payload.course_id)
+    if course:
+        instructor = session.get(Instructor, course.instructor_id)
+        if instructor:
+            instructor_info = {
+                "name": instructor.name,
+                "bio": instructor.bio,
+                "specialization": instructor.specialization,
+            }
+    
     # RAG 쿼리 실행
     result = pipeline.query(
         payload.question,
         course_id=payload.course_id,
-        conversation_history=history
+        conversation_history=history,
+        instructor_info=instructor_info
     )
     
     answer = result.get("answer", "")

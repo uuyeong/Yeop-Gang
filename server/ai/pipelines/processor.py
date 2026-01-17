@@ -20,6 +20,7 @@ def process_course_assets(
     pdf_path: Optional[Path] = None,
     smi_path: Optional[Path] = None,
     update_progress: Optional[Callable[[int, str], None]] = None,
+    instructor_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     백엔드 A: 자동화 파이프라인 오케스트레이션
@@ -378,7 +379,9 @@ def process_course_assets(
             # 동적 페르소나 프롬프트 생성
             try:
                 persona_prompt = pipeline.generate_persona_prompt(
-                    course_id=course_id, sample_texts=texts
+                    course_id=course_id, 
+                    sample_texts=texts,
+                    instructor_info=instructor_info
                 )
                 
                 if update_progress:

@@ -960,12 +960,25 @@ def ask(
             docs = []
             metas = []
         else:
+            # 강사 정보 가져오기
+            instructor_info = None
+            course = session.get(Course, payload.course_id)
+            if course:
+                instructor = session.get(Instructor, course.instructor_id)
+                if instructor:
+                    instructor_info = {
+                        "name": instructor.name,
+                        "bio": instructor.bio,
+                        "specialization": instructor.specialization,
+                    }
+            
             # RAG 쿼리 실행 (current_time 전달)
             result = pipeline.query(
                 payload.question, 
                 course_id=payload.course_id,
                 conversation_history=history,
-                current_time=payload.current_time
+                current_time=payload.current_time,
+                instructor_info=instructor_info
             )
             
             answer = result.get("answer", "")
