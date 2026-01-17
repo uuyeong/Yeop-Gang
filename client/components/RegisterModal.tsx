@@ -37,16 +37,16 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
     }
 
     try {
-      // 빈 필드는 undefined로 변환
+      // 빈 필드는 undefined로 변환 (빈 문자열, 공백만 있는 경우 포함)
       const payload: RegisterInstructorRequest = {
         id: formData.id,
         name: formData.name,
         email: formData.email,
         password: formData.password,
-        profile_image_url: formData.profile_image_url || undefined,
-        bio: formData.bio || undefined,
-        phone: formData.phone || undefined,
-        specialization: formData.specialization || undefined,
+        profile_image_url: formData.profile_image_url?.trim() || undefined,
+        bio: formData.bio?.trim() || undefined,
+        phone: formData.phone?.trim() || undefined,
+        specialization: formData.specialization?.trim() || undefined,
       };
 
       console.log("회원가입 요청:", { ...payload, password: "***" });
@@ -217,13 +217,13 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               프로필 이미지 URL
             </label>
             <input
-              type="url"
+              type="text"
               id="profile_image_url"
               name="profile_image_url"
               value={formData.profile_image_url}
               onChange={handleChange}
               className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="https://example.com/profile.jpg"
+              placeholder="https://example.com/profile.jpg (선택사항)"
             />
           </div>
 

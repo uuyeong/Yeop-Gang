@@ -80,6 +80,52 @@ BACKEND_URL=http://localhost:8000
 - **강의 업로드**: 비디오/오디오/PDF 파일 업로드
 - **처리 상태 확인**: 실시간 진행률 표시
 
+## API 엔드포인트 목록
+
+### 인증 API
+
+| 메서드 | 엔드포인트 | 설명 | 인증 |
+|--------|-----------|------|------|
+| `POST` | `/api/auth/register/instructor` | 강사 회원가입 | 불필요 |
+| `POST` | `/api/auth/register/student` | 학생 회원가입 | 불필요 |
+| `POST` | `/api/auth/login` | 로그인 (강사/학생) | 불필요 |
+
+### 강사용 API
+
+| 메서드 | 엔드포인트 | 설명 | 인증 |
+|--------|-----------|------|------|
+| `POST` | `/api/instructor/courses` | 강의 목록 생성 | 강사 토큰 |
+| `POST` | `/api/instructor/upload` | 강의 파일 업로드 | 강사 토큰 |
+| `GET` | `/api/instructor/courses` | 강의 목록 조회 | 강사 토큰 |
+| `PATCH` | `/api/instructor/courses/{course_id}` | 강의 정보 수정 | 강사 토큰 |
+| `DELETE` | `/api/instructor/courses/{course_id}` | 강의 삭제 | 강사 토큰 |
+| `GET` | `/api/instructor/profile` | 프로필 정보 조회 | 강사 토큰 |
+| `PATCH` | `/api/instructor/profile` | 프로필 정보 수정 | 강사 토큰 |
+
+### 학생용 API
+
+| 메서드 | 엔드포인트 | 설명 | 인증 |
+|--------|-----------|------|------|
+| `POST` | `/api/student/enroll` | 강의 등록 | 학생 토큰 |
+| `GET` | `/api/student/courses` | 등록한 강의 목록 조회 | 학생 토큰 |
+
+### 공통 API
+
+| 메서드 | 엔드포인트 | 설명 | 인증 |
+|--------|-----------|------|------|
+| `GET` | `/api/health` | 서버 상태 확인 | 불필요 |
+| `GET` | `/api/status/{course_id}` | 강의 처리 상태 조회 | 강사/학생 토큰 |
+| `GET` | `/api/video/{course_id}` | 비디오/오디오 스트리밍 | 강사/학생 토큰 |
+| `POST` | `/api/chat/ask` | AI 챗봇 질의 | 강사/학생 토큰 |
+| `POST` | `/api/summary` | 강의 요약 생성 | 강사/학생 토큰 |
+| `POST` | `/api/quiz/generate` | 퀴즈 생성 | 강사/학생 토큰 |
+| `POST` | `/api/quiz/submit` | 퀴즈 답변 제출 | 강사/학생 토큰 |
+| `GET` | `/api/courses` | 공개 강의 목록 조회 | 불필요 |
+| `GET` | `/api/courses/{course_id}` | 강의 상세 정보 조회 | 불필요 |
+| `GET` | `/api/courses/{course_id}/chapters` | 강의 챕터 목록 조회 | 불필요 |
+
+**상세한 API 사용법은 [API_README.md](./API_README.md)를 참고하세요.**
+
 ## 다음 단계 제안
 
 - Backend A: Whisper STT 연결, 임베딩/리트리버/LLM 연결, 출처 반환 개선, 요약/퀴즈 전용 API 엔드포인트.
