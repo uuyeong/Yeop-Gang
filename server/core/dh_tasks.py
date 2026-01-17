@@ -127,6 +127,20 @@ def process_course_assets_wrapper(
         # 백엔드 A의 processor 모듈 import 시도
         try:
             from ai.pipelines.processor import process_course_assets
+            from core.models import Instructor
+            
+            # 강사 정보 가져오기
+            instructor_info = None
+            with Session(engine) as session:
+                instructor = session.get(Instructor, instructor_id)
+                if instructor:
+                    instructor_info = {
+                        "name": instructor.name,
+                        "bio": instructor.bio,
+                        "specialization": instructor.specialization,
+                    }
+                    logger.info(f"강사 정보 로드: {instructor_id} - {instructor.name}")
+            
             # 백엔드 A의 함수가 있으면 호출
             _update_progress(course_id, 10, "파이프라인 시작")
             
@@ -142,6 +156,7 @@ def process_course_assets_wrapper(
                 pdf_path=pdf_path,
                 smi_path=smi_path,
                 update_progress=update_progress_callback,
+                instructor_info=instructor_info,
             )
             
             # 처리 결과 확인
