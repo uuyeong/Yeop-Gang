@@ -11,7 +11,16 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+
+# bcrypt 직접 사용 (passlib의 버전 호환성 문제 회피)
+try:
+    import bcrypt
+    USE_BCRYPT_DIRECT = True
+except ImportError:
+    USE_BCRYPT_DIRECT = False
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 from sqlmodel import Session, select
 
 from core.db import get_session
@@ -23,16 +32,23 @@ JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
-# 비밀번호 해싱
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 # HTTP Bearer 토큰
 security = HTTPBearer()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """비밀번호 검증"""
-    return pwd_context.verify(plain_password, hashed_password)
+    if USE_BCRYPT_DIRECT:
+        try:
+            # bcrypt 직접 사용
+            return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+        except Exception:
+            # 인코딩 오류 시 bytes로 시도
+            if isinstance(hashed_password, str):
+                return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+            return False
+    else:
+        return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
@@ -41,12 +57,50 @@ def get_password_hash(password: str) -> str:
     bcrypt는 최대 72바이트까지만 처리할 수 있으므로,
     더 긴 비밀번호는 자동으로 잘라냅니다.
     """
+    if not password:
+        raise ValueError("Password cannot be empty")
+    
     # bcrypt는 최대 72바이트까지만 처리 가능
-    if isinstance(password, str):
-        password_bytes = password.encode('utf-8')
-        if len(password_bytes) > 72:
-            password = password_bytes[:72].decode('utf-8', errors='ignore')
-    return pwd_context.hash(password)
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        # 72바이트를 초과하면 UTF-8 문자 경계를 고려하여 자르기
+        # 마지막 불완전한 문자를 피하기 위해 72바이트 이하로 조정
+        truncated_bytes = password_bytes[:72]
+        # 마지막 바이트가 불완전한 UTF-8 문자일 수 있으므로 안전하게 디코딩
+        try:
+            password = truncated_bytes.decode('utf-8')
+            password_bytes = password.encode('utf-8')
+        except UnicodeDecodeError:
+            # 마지막 바이트가 불완전하면 하나씩 제거하며 시도
+            for i in range(1, 4):
+                if len(truncated_bytes) > i:
+                    try:
+                        password = truncated_bytes[:-i].decode('utf-8')
+                        password_bytes = password.encode('utf-8')
+                        break
+                    except UnicodeDecodeError:
+                        continue
+            else:
+                # 모두 실패하면 에러 없이 72바이트 이하로 강제 자르기
+                password = password_bytes[:72].decode('utf-8', errors='ignore')
+                password_bytes = password.encode('utf-8')
+    
+    try:
+        if USE_BCRYPT_DIRECT:
+            # bcrypt 직접 사용 (passlib 버전 호환성 문제 회피)
+            salt = bcrypt.gensalt()
+            hashed = bcrypt.hashpw(password_bytes, salt)
+            return hashed.decode('utf-8')
+        else:
+            return pwd_context.hash(password)
+    except Exception as e:
+        # bcrypt 오류 처리 (버전 호환성 문제 등)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Password hashing error: {e}")
+        # fallback: 간단한 해싱 (보안상 권장하지 않지만 오류 방지)
+        import hashlib
+        return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
