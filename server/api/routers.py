@@ -779,6 +779,12 @@ def ask(
     pipeline: RAGPipeline = Depends(get_pipeline),
     session: Session = Depends(get_session),
 ) -> ChatResponse:
+    # course_id URL 디코딩 (프론트엔드에서 인코딩되어 전달될 수 있음)
+    from urllib.parse import unquote
+    course_id = unquote(payload.course_id) if payload.course_id else payload.course_id
+    # payload.course_id를 디코딩된 값으로 업데이트
+    payload.course_id = course_id
+    
     conversation_id = payload.conversation_id or "default"
     
     # 대화 히스토리 가져오기
@@ -1842,18 +1848,22 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
     import json
     from sqlmodel import select
     from core.models import Video, Course
+    from urllib.parse import unquote
     
     try:
+        # course_id URL 디코딩 (이중 안전장치)
+        decoded_course_id = unquote(course_id) if course_id else course_id
+        
         # Course 정보 가져오기
-        course = session.get(Course, course_id)
+        course = session.get(Course, decoded_course_id)
         if not course:
-            print(f"[TRANSCRIPT DEBUG] Course not found: {course_id}")
+            print(f"[TRANSCRIPT DEBUG] Course not found: {course_id} (decoded: {decoded_course_id})")
             return None
         
         # Video 레코드에서 transcript_path 찾기
         videos = session.exec(
             select(Video).where(
-                Video.course_id == course_id,
+                Video.course_id == decoded_course_id,
                 Video.transcript_path.isnot(None)  # transcript_path가 있는 것만
             )
         ).all()
@@ -1890,7 +1900,7 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
                 for instructor_id in possible_instructor_ids:
                     if not instructor_id:
                         continue
-                    course_dir = app_settings.uploads_dir / instructor_id / course_id
+                    course_dir = app_settings.uploads_dir / instructor_id / decoded_course_id
                     print(f"[TRANSCRIPT DEBUG] Trying path: {course_dir}")
                     
                     if course_dir.exists():
@@ -1936,7 +1946,7 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
             return None
         
         if transcript_text and len(transcript_text.strip()) > 0:
-            print(f"✅ Loaded transcript from file for course {course_id}: {transcript_path} (length: {len(transcript_text)})")
+            print(f"✅ Loaded transcript from file for course {decoded_course_id}: {transcript_path} (length: {len(transcript_text)})")
             if return_segments:
                 return {
                     "text": transcript_text,
@@ -1948,7 +1958,7 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
         return None
     except Exception as e:
         import traceback
-        print(f"⚠️ Failed to load transcript for course {course_id}: {e}")
+        print(f"⚠️ Failed to load transcript for course {course_id} (decoded: {decoded_course_id}): {e}")
         print(f"[TRANSCRIPT DEBUG] Traceback: {traceback.format_exc()}")
         return None
 
