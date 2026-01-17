@@ -569,7 +569,10 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
     
     # Try to get video/audio from database
     course = session.get(Course, course_id)
+    logger.info(f"Course found in DB: {course is not None}")
     if course:
+        logger.info(f"Instructor ID: {course.instructor_id}")
+        logger.info(f"Uploads directory: {settings.uploads_dir}")
         # 우선 video 타입 파일 확인 (mp4 우선)
         videos = session.exec(
             select(Video).where(
@@ -577,7 +580,9 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
                 Video.filetype == "video"
             )
         ).all()
+        logger.info(f"Found {len(videos)} video records in DB")
         for vid in videos:
+            logger.info(f"Checking video record: filename={vid.filename}, storage_path={vid.storage_path}, filetype={vid.filetype}")
             # storage_path가 절대 경로인지 상대 경로인지 확인
             video_path = Path(vid.storage_path)
             if not video_path.is_absolute():
@@ -588,6 +593,7 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
             else:
                 video_path = video_path.resolve()
             
+            logger.info(f"Resolved video path: {video_path} (exists: {video_path.exists()})")
             if video_path.exists():
                 suffix = video_path.suffix.lower()
                 logger.info(f"Found video file: {video_path} (suffix: {suffix})")
@@ -606,7 +612,9 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
                 Video.filetype == "audio"
             )
         ).all()
+        logger.info(f"Found {len(audios)} audio records in DB")
         for audio in audios:
+            logger.info(f"Checking audio record: filename={audio.filename}, storage_path={audio.storage_path}")
             # storage_path가 절대 경로인지 상대 경로인지 확인
             audio_path = Path(audio.storage_path)
             if not audio_path.is_absolute():
@@ -655,8 +663,12 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
         # instructor_id/course_id 구조로 찾기
         if course.instructor_id:
             course_dir = settings.uploads_dir / course.instructor_id / course_id
+            logger.info(f"Checking filesystem directory: {course_dir} (exists: {course_dir.exists()})")
             if course_dir.exists():
                 logger.info(f"Searching for files in: {course_dir}")
+                # 디렉토리 내 파일 목록 출력
+                all_files = list(course_dir.iterdir())
+                logger.info(f"Files in directory: {[f.name for f in all_files]}")
                 # mp4 파일 찾기
                 for video_file in course_dir.glob("*.mp4"):
                     if video_file.exists():

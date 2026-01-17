@@ -305,8 +305,28 @@ class RAGPipeline:
             context_parts.append(ctx)
         context = "\n".join(context_parts) if context_parts else ""
 
-        # 저장된 페르소나 프롬프트 사용 (있으면), 없으면 검색된 문서로 생성
-        if persona_doc:
+        # DB에서 persona_profile 로드 시도 (우선순위 1)
+        persona = None
+        persona_profile_json = None
+        try:
+            from sqlmodel import Session
+            from core.db import engine
+            from core.models import Course
+            
+            with Session(engine) as session:
+                course = session.get(Course, course_id)
+                if course and course.persona_profile:
+                    persona_profile_json = course.persona_profile
+                    import json
+                    persona_dict = json.loads(persona_profile_json)
+                    from ai.style_analyzer import create_persona_prompt
+                    persona = create_persona_prompt(persona_dict)
+                    print(f"[RAG DEBUG] ✅ DB에서 persona_profile 로드 (course_id={course_id})")
+        except Exception as e:
+            print(f"[RAG DEBUG] ⚠️ DB에서 persona_profile 로드 실패: {e}")
+        
+        # DB에서 로드 실패 시 벡터 DB의 persona 사용 (우선순위 2)
+        if not persona and persona_doc:
             persona = persona_doc
             # 강사 정보가 있고 페르소나에 포함되지 않았을 수 있으므로 추가
             if instructor_info:
@@ -325,9 +345,9 @@ class RAGPipeline:
                     
                     if instructor_context and "강사 정보" not in persona:
                         persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
-            print(f"[RAG DEBUG] ✅ 저장된 페르소나 프롬프트 사용 (course_id={course_id})")
-        else:
-            # 페르소나 프롬프트를 찾지 못한 경우, 검색된 문서로 생성 (fallback)
+            print(f"[RAG DEBUG] ✅ 벡터 DB의 페르소나 프롬프트 사용 (course_id={course_id})")
+        elif not persona:
+            # 페르소나 프롬프트를 찾지 못한 경우, 검색된 문서로 생성 (fallback, 우선순위 3)
             print(f"[RAG DEBUG] ⚠️ 저장된 페르소나를 찾지 못해 검색된 문서로 생성 (fallback, course_id={course_id})")
             persona = self.generate_persona_prompt(
                 course_id=course_id, 
@@ -335,13 +355,27 @@ class RAGPipeline:
                 instructor_info=instructor_info
             )
         
+        # Strict Grounding Rule (최상단에 명시)
+        strict_grounding_rule = """**⚠️ Strict Grounding Rule (필수 준수):**
+Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
+- 강의 컨텍스트에 명확히 언급된 내용만 답변하세요.
+- 강의에서 설명하지 않은 내용은 AI가 아무리 잘 알고 있어도 답변하지 마세요.
+- 강의 컨텍스트에 없는 내용을 추측하거나 일반 지식으로 보완하지 마세요.
+- 모르면 정직하게 "이 강의에서는 다루지 않은 내용입니다"라고 답변하세요.
+
+이 규칙은 모든 답변에 우선 적용됩니다. 위반 시 부정확한 정보 제공으로 이어질 수 있습니다.
+
+---
+
+"""
+        
         # 오디오 지식 우선, GPT 지식 보조 프롬프트
         if context:
             knowledge_instruction = (
-                "중요: 아래 '강의 컨텍스트'에 있는 내용이 가장 우선순위가 높습니다. "
-                "먼저 강의 컨텍스트에서 답을 찾으세요. "
+                "**중요**: 아래 '강의 컨텍스트'에 있는 내용만 답변하세요. "
+                "강의 컨텍스트에서 답을 찾으세요. "
                 "강의 컨텍스트에 명확한 답이 있으면 그대로 사용하세요. "
-                "강의 컨텍스트에 없는 내용이 필요할 때만 일반적인 지식으로 보완하세요.\n\n"
+                "강의 컨텍스트에 없는 내용은 답변하지 마세요.\n\n"
                 "강의 컨텍스트:\n"
                 f"{context}\n\n"
                 "위 강의 컨텍스트를 바탕으로 질문에 답변하세요. "
@@ -351,8 +385,8 @@ class RAGPipeline:
             knowledge_instruction = (
                 "⚠️ 경고: 강의 컨텍스트를 찾지 못했습니다. "
                 "이는 강의가 아직 처리되지 않았거나, 벡터 DB에 데이터가 없을 수 있습니다. "
-                "일반적인 지식으로 답변하되, 강의 범위와 관련된 내용임을 명시하세요. "
-                "강의 내용을 확인할 수 없으므로 정확한 답변을 제공하기 어렵습니다."
+                "강의 내용을 확인할 수 없으므로 정확한 답변을 제공하기 어렵습니다. "
+                "이 강의에서는 다루지 않은 내용이거나 아직 처리되지 않은 강의일 수 있습니다."
             )
             print(f"[RAG DEBUG] ⚠️ No context found for course_id={course_id}, question: {question[:50]}")
             # 컨텍스트가 없으면 명시적으로 표시 (상위 레벨에서 transcript 파일 사용하도록)
@@ -365,6 +399,7 @@ class RAGPipeline:
             }
         
         sys_prompt = (
+            strict_grounding_rule +
             f"{persona}\n\n"
             "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
             "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
@@ -372,8 +407,8 @@ class RAGPipeline:
             "위 말투 지시사항을 정확히 따라 답변하세요.\n\n"
             f"{knowledge_instruction}\n\n"
             "답변 규칙:\n"
-            "- 강의 컨텍스트의 내용을 최우선으로 사용하세요.\n"
-            "- 강의 컨텍스트에 없는 내용은 일반 지식으로 보완 가능하지만, 강의 내용임을 강조하세요.\n"
+            "- **Strict Grounding Rule을 우선 준수**: Context에 없는 내용은 절대 답변하지 마세요.\n"
+            "- 강의 컨텍스트의 내용만 사용하세요.\n"
             "- 모르면 모른다고 말하세요.\n"
             "- 코스 범위 밖 질문은 답하지 않습니다.\n"
             "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"

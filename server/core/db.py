@@ -17,12 +17,25 @@ def _prepare_sqlite_url(url: str) -> str:
 
     parsed = urlparse(url)
     path = parsed.path
+    
+    # sqlite:/// 경로 처리
     if path.startswith("///"):
-        file_path = Path(path[3:])  # strip leading ///
+        # sqlite:///./data/yeopgang.db -> ./data/yeopgang.db
+        file_path = Path(path[3:])
+    elif path.startswith("/"):
+        # sqlite:///data/yeopgang.db -> data/yeopgang.db (절대 경로로 오해하지 않도록)
+        if path.startswith("//"):
+            file_path = Path(path[2:])
+        else:
+            file_path = Path(path[1:])
     else:
         file_path = Path(path)
-
+    
+    # 상대 경로 처리 (./data/yeopgang.db -> server/data/yeopgang.db)
     if not file_path.is_absolute():
+        # ./data/yeopgang.db -> data/yeopgang.db로 정규화
+        if file_path.parts and file_path.parts[0] == ".":
+            file_path = Path(*file_path.parts[1:])
         # server 폴더 기준으로 해석
         file_path = SERVER_ROOT / file_path
 
@@ -71,7 +84,7 @@ def _migrate_add_progress_column() -> None:
 
 
 def _migrate_add_course_columns() -> None:
-    """Course 테이블에 추가 컬럼 추가 (마이그레이션)"""
+    """Course 테이블에 추가 컬럼 추가 (마이그레이션) - persona_profile 포함"""
     try:
         from sqlalchemy import inspect, text
         
@@ -111,6 +124,11 @@ def _migrate_add_course_columns() -> None:
         if "updated_at" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE course ADD COLUMN updated_at DATETIME"))
+        
+        # persona_profile 컬럼 추가 (Style Analyzer 결과 저장용)
+        if "persona_profile" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN persona_profile TEXT"))
         
         # is_public 컬럼이 NOT NULL로 되어 있으면 기존 데이터에 기본값 설정
         if "is_public" in columns:
@@ -189,15 +207,18 @@ def init_db() -> None:
     # 데이터베이스 파일 경로 출력
     db_url = settings.database_url
     if db_url.startswith("sqlite"):
-        # sqlite:/// 경로에서 실제 파일 경로 추출
+        # _prepare_sqlite_url이 이미 처리한 경로를 사용
+        # 실제 파일 경로 추출
         from urllib.parse import urlparse
-        parsed = urlparse(db_url)
+        prepared_url = _prepare_sqlite_url(db_url)
+        parsed = urlparse(prepared_url)
         if parsed.path.startswith("///"):
             db_file = Path(parsed.path[3:])
+        elif parsed.path.startswith("/"):
+            db_file = Path(parsed.path[1:]) if len(parsed.path) > 1 else Path(parsed.path)
         else:
             db_file = Path(parsed.path)
-        if not db_file.is_absolute():
-            db_file = SERVER_ROOT / db_file
+        
         print(f"[DB] 데이터베이스 경로: {db_file}")
         print(f"[DB] 데이터베이스 디렉토리 존재: {db_file.parent.exists()}")
     
@@ -214,7 +235,7 @@ def init_db() -> None:
     
     # 기존 테이블에 progress 컬럼 추가 (마이그레이션)
     _migrate_add_progress_column()
-    # Course 테이블에 추가 컬럼 추가 (마이그레이션)
+    # Course 테이블에 추가 컬럼 추가 (마이그레이션) - persona_profile 포함
     _migrate_add_course_columns()
     # Instructor 테이블에 프로필 컬럼 추가 (마이그레이션)
     _migrate_add_instructor_profile_columns()

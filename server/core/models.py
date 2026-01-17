@@ -52,6 +52,7 @@ class Course(SQLModel, table=True):
     )
     status: CourseStatus = Field(default=CourseStatus.processing)
     progress: int = Field(default=0, description="처리 진행도 (0-100)")  # 0-100%
+    persona_profile: Optional[str] = Field(default=None, description="강사 스타일 분석 결과 (JSON 문자열)")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
