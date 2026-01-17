@@ -31,6 +31,19 @@ export type TokenResponse = {
   expires_in: number;
 };
 
+export type InstructorProfileResponse = {
+  id: string;
+  name: string;
+  email: string;
+  profile_image_url?: string | null;
+  bio?: string | null;
+  phone?: string | null;
+  specialization?: string | null;
+  created_at: string;
+  updated_at: string;
+  course_count: number;
+};
+
 /**
  * 강사 회원가입
  */
@@ -88,6 +101,37 @@ export async function login(data: LoginRequest): Promise<TokenResponse> {
 
     return await response.json();
   } catch (error) {
+    throw handleApiError(error);
+  }
+}
+
+/**
+ * 강사 프로필 정보 조회
+ */
+export async function getInstructorProfile(
+  token: string
+): Promise<InstructorProfileResponse> {
+  const url = `${API_BASE_URL}/api/instructor/profile`;
+  
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.detail || errorData.message || getHttpErrorMessage(response.status);
+      throw new Error(errorMessage);
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error("프로필 조회 예외:", error);
     throw handleApiError(error);
   }
 }

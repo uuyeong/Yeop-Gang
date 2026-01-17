@@ -89,15 +89,21 @@ async def register_instructor(
     password_hash = get_password_hash(payload.password)
     
     # 강사 생성 (프로필 정보 포함)
+    # 빈 문자열을 None으로 변환
+    profile_image_url = payload.profile_image_url.strip() if payload.profile_image_url and payload.profile_image_url.strip() else None
+    bio = payload.bio.strip() if payload.bio and payload.bio.strip() else None
+    phone = payload.phone.strip() if payload.phone and payload.phone.strip() else None
+    specialization = payload.specialization.strip() if payload.specialization and payload.specialization.strip() else None
+    
     instructor = Instructor(
         id=payload.id,
         name=payload.name,
         email=payload.email,
         password_hash=password_hash,
-        profile_image_url=payload.profile_image_url,
-        bio=payload.bio,
-        phone=payload.phone,
-        specialization=payload.specialization,
+        profile_image_url=profile_image_url,
+        bio=bio,
+        phone=phone,
+        specialization=specialization,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
