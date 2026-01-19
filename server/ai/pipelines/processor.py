@@ -405,29 +405,14 @@ def process_course_assets(
                     from ai.style_analyzer import create_persona_prompt
                     persona_dict = json.loads(persona_profile_json)
                     persona_prompt = create_persona_prompt(persona_dict)
-                    # instructor_info가 있으면 페르소나에 추가
-                    if instructor_info:
-                        instructor_context = ""
-                        name = instructor_info.get("name", "")
-                        bio = instructor_info.get("bio", "")
-                        specialization = instructor_info.get("specialization", "")
-                        
-                        if name or specialization or bio:
-                            if name:
-                                instructor_context += f"강사 이름: {name}\n"
-                            if specialization:
-                                instructor_context += f"전문 분야: {specialization}\n"
-                            if bio:
-                                instructor_context += f"자기소개/배경: {bio}\n"
-                            
-                            if instructor_context and "강사 정보" not in persona_prompt:
-                                persona_prompt = f"{persona_prompt}\n\n강사 정보:\n{instructor_context}"
+                    # ⚠️ 강사 정보는 ChromaDB에 저장하지 않음 (DB에서 동적으로 로드)
+                    # instructor_info는 분석 시에만 참고하고, 페르소나 프롬프트에는 포함하지 않음
                 else:
-                    # 기존 방식 (fallback) - instructor_info 포함
+                    # 기존 방식 (fallback) - 강사 정보는 포함하지 않음 (DB에서 동적으로 로드)
                     persona_prompt = pipeline.generate_persona_prompt(
                         course_id=course_id, 
                         sample_texts=texts,
-                        instructor_info=instructor_info
+                        instructor_info=None  # ChromaDB에 저장하지 않음
                     )
                 
                 if update_progress:
