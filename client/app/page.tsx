@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { BookOpen, GraduationCap, PlayCircle, Settings } from "lucide-react";
+import { BookOpen, GraduationCap, PlayCircle, Settings, Upload } from "lucide-react";
 import { isAuthenticated, getUser, getToken } from "@/lib/auth";
 import LoginModal from "@/components/LoginModal";
 import RegisterModal from "@/components/RegisterModal";
