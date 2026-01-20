@@ -10,10 +10,8 @@ export type RegisterInstructorRequest = {
   name: string;
   email: string;
   password: string;
-  profile_image_url?: string;
   bio?: string;
-  phone?: string;
-  specialization?: string;
+  specialization: string; // 필수 필드
   initial_courses?: Array<{ course_id: string; title: string }>;
 };
 

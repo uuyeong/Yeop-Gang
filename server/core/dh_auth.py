@@ -208,6 +208,50 @@ def require_any_user():
     return require_role([UserRole.instructor, UserRole.student])
 
 
+async def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    session: Session = Depends(get_session),
+) -> Optional[dict]:
+    """현재 사용자 정보 가져오기 (인증 선택적)"""
+    if not credentials:
+        return None
+    
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload is None:
+        return None
+    
+    user_id: str = payload.get("sub")
+    user_role: str = payload.get("role")
+    
+    if not user_id or not user_role:
+        return None
+    
+    # 사용자 정보 확인
+    if user_role == UserRole.instructor:
+        instructor = session.get(Instructor, user_id)
+        if not instructor:
+            return None
+        return {
+            "id": instructor.id,
+            "role": UserRole.instructor,
+            "name": instructor.name,
+            "email": instructor.email,
+        }
+    elif user_role == UserRole.student:
+        student = session.get(Student, user_id)
+        if not student:
+            return None
+        return {
+            "id": student.id,
+            "role": UserRole.student,
+            "name": student.name,
+            "email": student.email,
+        }
+    
+    return None
+
+
 async def verify_course_access(
     course_id: str,
     current_user: dict = Depends(get_current_user),

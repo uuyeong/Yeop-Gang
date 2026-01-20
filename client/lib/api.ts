@@ -79,12 +79,24 @@ export async function apiFetch<T>(
     : `${API_BASE_URL}${endpoint}`;
 
   try {
+    // 인증 토큰이 있으면 Authorization 헤더 추가
+    const token = typeof window !== 'undefined' 
+      ? (localStorage.getItem("token") || localStorage.getItem("instructor_token") || "")
+      : "";
+    
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+      ...options?.headers,
+    };
+    
+    // Authorization 헤더가 없고 토큰이 있으면 추가
+    if (token && !headers["Authorization"] && !options?.headers?.["Authorization"]) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
     const response = await fetch(url, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-      },
+      headers,
     });
 
     if (!response.ok) {

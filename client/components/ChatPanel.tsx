@@ -8,11 +8,12 @@ import { API_BASE_URL, apiPost, handleApiError } from "../lib/api";
 type Props = {
   courseId: string;
   courseTitle?: string;  // 강의명 (선택사항)
+  instructorName?: string;  // 강사명 (선택사항)
   onTimestampClick?: (timeInSeconds: number) => void;
   currentTime?: number;  // 현재 비디오 재생 시간 (초)
 };
 
-export default function ChatPanel({ courseId, courseTitle, onTimestampClick, currentTime }: Props) {
+export default function ChatPanel({ courseId, courseTitle, instructorName, onTimestampClick, currentTime }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -279,71 +280,72 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
         className="flex-1 space-y-2 overflow-y-auto px-3 py-3 bg-slate-100"
       >
         {transcript.map((msg, idx) => {
-          // 연속된 assistant 메시지 중 첫 번째만 프로필 표시
-          const isFirstAssistantInGroup = 
-            msg.role === "assistant" && (
-              idx === 0 || 
-              transcript[idx - 1].role !== "assistant"
-            );
-          
           return (
             <div
               key={msg.id}
-              className={`flex items-end gap-2 ${
-                msg.role === "user" ? "flex-row-reverse" : ""
+              className={`flex gap-2 ${
+                msg.role === "user" 
+                  ? "flex-row-reverse items-end" 
+                  : "items-start"
               }`}
             >
-              {/* 프로필 이미지 (봇만, 연속된 메시지 그룹의 첫 번째만) */}
-              {isFirstAssistantInGroup && (
-                <img
-                  src="https://i.ibb.co/27yY0pLS/default-profile.png"
-                  alt="옆강 봇"
-                  className="h-7 w-7 rounded-full object-cover flex-shrink-0"
-                />
+              {/* 프로필 이미지 (assistant만) */}
+              {msg.role === "assistant" && (
+                <div className="flex-shrink-0">
+                  <img
+                    src="https://i.ibb.co/27yY0pLS/default-profile.png"
+                    alt="옆강 봇"
+                    className="h-8 w-8 rounded-full object-cover border border-slate-200"
+                  />
+                </div>
               )}
-              {!isFirstAssistantInGroup && msg.role === "assistant" && (
-                <div className="h-7 w-7 flex-shrink-0" /> // 공간 유지용 빈 div
-              )}
-            
-            {/* 말풍선 */}
-            <div
-              className={`rounded-2xl px-3 py-2 max-w-[75%] ${
-                msg.role === "assistant"
-                  ? "bg-white rounded-bl-sm"
-                  : "bg-blue-500 text-white rounded-br-sm"
-              }`}
-            >
+              
+              {/* 말풍선 영역 */}
               {msg.role === "assistant" ? (
-                <div className="text-sm">
-                  {parseAndRenderContent(msg.content).map((part, idx) => {
-                    if (typeof part === "string") {
-                      return <span key={idx}>{part}</span>;
-                    } else {
-                      // 타임스탬프 버튼
-                      const minutes = Math.floor(part.time / 60);
-                      const seconds = Math.floor(part.time % 60);
-                      const timeText = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-                      return (
-                        <button
-                          key={idx}
-                          onClick={() => handleTimestampClick(part.time)}
-                          className="mx-1 inline-flex items-center rounded-md bg-blue-500 px-2 py-0.5 text-xs font-medium text-white hover:bg-blue-600 transition-colors underline"
-                          title={`${timeText}로 이동`}
-                        >
-                          {timeText}
-                        </button>
-                      );
-                    }
-                  })}
+                <div className="flex flex-col gap-1">
+                  {instructorName && (
+                    <span className="text-xs text-slate-500 px-1">
+                      {instructorName}
+                    </span>
+                  )}
+                  <div
+                    className="rounded-2xl bg-white rounded-bl-sm px-3 py-2 max-w-[75%] shadow-sm"
+                  >
+                    <div className="text-sm">
+                      {parseAndRenderContent(msg.content).map((part, idx) => {
+                        if (typeof part === "string") {
+                          return <span key={idx}>{part}</span>;
+                        } else {
+                          // 타임스탬프 버튼
+                          const minutes = Math.floor(part.time / 60);
+                          const seconds = Math.floor(part.time % 60);
+                          const timeText = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => handleTimestampClick(part.time)}
+                              className="mx-1 inline-flex items-center rounded-md bg-blue-500 px-2 py-0.5 text-xs font-medium text-white hover:bg-blue-600 transition-colors underline"
+                              title={`${timeText}로 이동`}
+                            >
+                              {timeText}
+                            </button>
+                          );
+                        }
+                      })}
+                    </div>
+                  </div>
                 </div>
               ) : (
-                <div className="text-sm text-white">
-                  {removeMarkdown(msg.content)}
+                <div
+                  className="rounded-2xl bg-blue-500 text-white rounded-br-sm px-3 py-2 max-w-[75%]"
+                >
+                  <div className="text-sm text-white">
+                    {removeMarkdown(msg.content)}
+                  </div>
                 </div>
               )}
             </div>
-          </div>
-        );
+          );
         })}
         
         {/* 로딩 인디케이터 */}
@@ -419,4 +421,3 @@ export default function ChatPanel({ courseId, courseTitle, onTimestampClick, cur
     </div>
   );
 }
-

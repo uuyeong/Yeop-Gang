@@ -33,6 +33,7 @@ from api.dh_schemas import (
 from core.db import get_session, engine
 from core.dh_auth import (
     get_current_user,
+    get_current_user_optional,
     require_instructor,
     require_student,
     require_any_user,
@@ -96,8 +97,8 @@ async def register_instructor(
     # 빈 문자열을 None으로 변환
     profile_image_url = payload.profile_image_url.strip() if payload.profile_image_url and payload.profile_image_url.strip() else None
     bio = payload.bio.strip() if payload.bio and payload.bio.strip() else None
-    phone = payload.phone.strip() if payload.phone and payload.phone.strip() else None
-    specialization = payload.specialization.strip() if payload.specialization and payload.specialization.strip() else None
+    # specialization은 필수이므로 빈 문자열 체크만
+    specialization = payload.specialization.strip() if payload.specialization else ""
     
     instructor = Instructor(
         id=payload.id,
@@ -106,7 +107,7 @@ async def register_instructor(
         password_hash=password_hash,
         profile_image_url=profile_image_url,
         bio=bio,
-        phone=phone,
+        phone=None,  # 전화번호 필드 제거
         specialization=specialization,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
@@ -846,6 +847,58 @@ async def get_video(
         return FileResponse(ref_video, media_type="video/mp4")
     
     raise HTTPException(status_code=404, detail="Video/Audio not found")
+
+
+@router.get("/courses/{course_id}/transcript")
+async def get_transcript(
+    course_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    session: Session = Depends(get_session),
+) -> dict:
+    """전사된 transcript JSON 데이터 조회 (자막용)
+    
+    자막은 강의 시청에 필수적이므로 인증을 선택적으로 처리.
+    토큰이 없어도 transcript에 접근 가능하도록 함.
+    """
+    try:
+        from api.routers import _load_transcript_for_course
+        from urllib.parse import unquote
+        from core.dh_auth import get_current_user_optional
+        
+        # course_id URL 디코딩
+        decoded_course_id = unquote(course_id) if course_id else course_id
+        
+        # transcript 로드 (권한 체크 없이 파일만 확인)
+        user_id = current_user.get('id', 'anonymous') if current_user else 'anonymous'
+        print(f"[TRANSCRIPT API] Loading transcript for course_id: {decoded_course_id} (user: {user_id})")
+        transcript_data = _load_transcript_for_course(decoded_course_id, session, return_segments=True)
+        
+        if transcript_data is None:
+            print(f"[TRANSCRIPT API] ❌ Transcript not found for course_id: {decoded_course_id}")
+            raise HTTPException(status_code=404, detail="Transcript not found for this course")
+        
+        # segments가 없으면 빈 배열 반환
+        if isinstance(transcript_data, dict):
+            segments = transcript_data.get("segments", [])
+            print(f"[TRANSCRIPT API] ✅ Found transcript with {len(segments)} segments for course_id: {decoded_course_id}")
+            return {
+                "text": transcript_data.get("text", ""),
+                "segments": segments
+            }
+        else:
+            # 텍스트만 있는 경우
+            print(f"[TRANSCRIPT API] ⚠️ Transcript found but no segments for course_id: {decoded_course_id}")
+            return {
+                "text": transcript_data,
+                "segments": []
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[TRANSCRIPT API] ❌ Error loading transcript: {e}")
+        print(f"[TRANSCRIPT API] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error loading transcript: {str(e)}")
 
 
 @router.post("/chat/ask", response_model=SafeChatResponse)

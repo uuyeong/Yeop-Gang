@@ -1,7 +1,6 @@
 # FastAPI 및 웹 프레임워크
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-starlette==0.41.2  # FastAPI 의존성 (BaseHTTPMiddleware 등)
 
 # AI/ML 라이브러리
 openai==1.60.2
@@ -17,7 +16,7 @@ sqlalchemy==2.0.35
 aiosqlite==0.20.0
 
 # 데이터 검증 및 설정
-pydantic==2.9.2
+pydantic==2.9.2 
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 email-validator==2.1.1

@@ -471,17 +471,34 @@ def list_courses(
     """
     from sqlmodel import or_
     
+    # 검색어가 있으면 강사 정보도 미리 가져오기
+    matching_instructor_ids = set()
+    if q:
+        q_lower = q.lower().strip()
+        # 강사명으로 검색 가능한 강사 ID 찾기
+        instructors = session.exec(select(Instructor)).all()
+        for instructor in instructors:
+            if instructor.name and q_lower in instructor.name.lower():
+                matching_instructor_ids.add(instructor.id)
+    
     query = select(Course)
     
-    # 검색어 필터 (SQLite는 ilike가 없으므로 contains 사용)
+    # 검색어 필터 (강의명 또는 강사 ID로 검색)
     if q:
-        # 강의명 또는 강의 ID로 검색
-        query = query.where(
-            or_(
-                Course.title.contains(q) if Course.title else False,
-                Course.id.contains(q),
-            )
-        )
+        q_lower = q.lower().strip()
+        conditions = []
+        
+        # 강의명으로 검색 (title이 None이 아닌 경우)
+        conditions.append(Course.title.contains(q))
+        # 강의 ID로 검색
+        conditions.append(Course.id.contains(q))
+        
+        # 강사명으로 검색 가능한 강사 ID 포함
+        if matching_instructor_ids:
+            conditions.append(Course.instructor_id.in_(list(matching_instructor_ids)))
+        
+        if conditions:
+            query = query.where(or_(*conditions))
     
     # 카테고리 필터
     if category:
@@ -496,9 +513,16 @@ def list_courses(
     result = []
     for course in courses:
         instructor = session.get(Instructor, course.instructor_id)
-        # 검색어가 강사명과 일치하는지 확인
-        if q and instructor and instructor.name:
-            if q.lower() not in instructor.name.lower():
+        
+        # 검색어 필터링: 강의명 또는 강사명 중 하나라도 일치하면 포함
+        if q:
+            q_lower = q.lower().strip()
+            course_title_match = course.title and q_lower in course.title.lower()
+            course_id_match = q_lower in course.id.lower()
+            instructor_name_match = instructor and instructor.name and q_lower in instructor.name.lower()
+            
+            # 하나도 일치하지 않으면 제외
+            if not (course_title_match or course_id_match or instructor_name_match):
                 continue
         
         # 챕터 개수 확인
@@ -514,6 +538,7 @@ def list_courses(
             "status": course.status.value,
             "instructor_id": course.instructor_id,
             "instructor_name": instructor.name if instructor else None,
+            "instructor_specialization": instructor.specialization if instructor else None,
             "created_at": course.created_at.isoformat() if course.created_at else None,
             "progress": getattr(course, "progress", 0),
             "has_chapters": has_chapters,
@@ -2206,31 +2231,79 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
                 from core.config import AppSettings
                 app_settings = AppSettings()
                 
+                # 여러 가능한 경로 시도
+                search_paths = []
+                
                 # 여러 가능한 instructor_id 경로 시도
                 possible_instructor_ids = []
-                # 일반적인 패턴을 먼저 시도 (test-instructor-1이 가장 일반적)
+                
+                # DB의 instructor_id가 있으면 우선적으로 사용
+                if course and course.instructor_id:
+                    possible_instructor_ids.append(course.instructor_id)
+                
+                # 일반적인 패턴 시도
                 possible_instructor_ids.extend([
+                    "jeon1234",  # 실제 파일 구조에 맞춤
                     "test-instructor-1",
                     "test-instructor",
                 ])
-                # course_id에서 추론 (test-course-1 -> test-instructor-1)
-                if "-" in course_id:
-                    base_name = course_id.split("-")[0]
-                    possible_instructor_ids.append(f"{base_name}-instructor-1")
-                    possible_instructor_ids.append(f"{base_name}-instructor")
-                # DB의 instructor_id도 시도 (마지막에 추가)
-                if course and course.instructor_id:
-                    possible_instructor_ids.append(course.instructor_id)
+                
+                # course_id에서 추론 (Biology-Concept-1 -> Biology 등)
+                if "-" in decoded_course_id:
+                    parts = decoded_course_id.split("-")
+                    if len(parts) > 0:
+                        base_name = parts[0].lower()
+                        possible_instructor_ids.extend([
+                            base_name,
+                            f"{base_name}1234",
+                            f"{base_name}-instructor-1",
+                        ])
                 
                 # 중복 제거 및 None 제거
                 possible_instructor_ids = list(dict.fromkeys([pid for pid in possible_instructor_ids if pid]))
                 
-                print(f"[TRANSCRIPT DEBUG] Trying to find transcript files with possible instructor_ids: {possible_instructor_ids}")
+                print(f"[TRANSCRIPT DEBUG] uploads_dir: {app_settings.uploads_dir}")
+                print(f"[TRANSCRIPT DEBUG] data_root: {app_settings.data_root}")
                 
+                # 1. uploads_dir 경로들 (가장 우선)
                 for instructor_id in possible_instructor_ids:
                     if not instructor_id:
                         continue
-                    course_dir = app_settings.uploads_dir / instructor_id / decoded_course_id
+                    search_paths.append(app_settings.uploads_dir / instructor_id / decoded_course_id)
+                
+                # 2. data 폴더 직접 경로들
+                # Path(__file__) = server/api/routers.py
+                # .parent = server/api
+                # .parent = server
+                # .parent = 프로젝트 루트
+                # 따라서 data 폴더는 프로젝트 루트에 있음
+                project_root = Path(__file__).resolve().parent.parent.parent
+                data_dir = project_root / app_settings.data_root
+                
+                # data/uploads/instructor_id/course_id
+                for instructor_id in possible_instructor_ids:
+                    if not instructor_id:
+                        continue
+                    search_paths.append(data_dir / "uploads" / instructor_id / decoded_course_id)
+                
+                # 3. 모든 uploads 폴더의 모든 instructor_id 하위에서 course_id 찾기
+                uploads_dir = app_settings.uploads_dir
+                if uploads_dir.exists():
+                    for instructor_dir in uploads_dir.iterdir():
+                        if instructor_dir.is_dir():
+                            course_dir = instructor_dir / decoded_course_id
+                            if course_dir.exists():
+                                search_paths.append(course_dir)
+                                print(f"[TRANSCRIPT DEBUG] Found course directory: {course_dir}")
+                
+                # 4. 마지막으로 data 폴더 루트에서 직접 검색
+                if data_dir.exists():
+                    search_paths.append(data_dir / decoded_course_id)
+                
+                print(f"[TRANSCRIPT DEBUG] Trying to find transcript files with possible instructor_ids: {possible_instructor_ids}")
+                print(f"[TRANSCRIPT DEBUG] Searching in {len(search_paths)} paths...")
+                
+                for course_dir in search_paths:
                     print(f"[TRANSCRIPT DEBUG] Trying path: {course_dir}")
                     
                     if course_dir.exists():
@@ -2241,7 +2314,16 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
                             print(f"[TRANSCRIPT DEBUG] ✅ Found transcript file in filesystem: {transcript_path}")
                             break
                         else:
-                            print(f"[TRANSCRIPT DEBUG] No transcript files found in {course_dir}")
+                            # *.json 파일도 찾아봐 (transcript_로 시작하지 않는 경우)
+                            json_files = list(course_dir.glob("*.json"))
+                            # transcript 관련 파일만 필터링
+                            transcript_json_files = [f for f in json_files if "transcript" in f.name.lower() or "caption" in f.name.lower() or "subtitle" in f.name.lower()]
+                            if transcript_json_files:
+                                transcript_path = transcript_json_files[0]
+                                print(f"[TRANSCRIPT DEBUG] ✅ Found transcript-related JSON file: {transcript_path}")
+                                break
+                            else:
+                                print(f"[TRANSCRIPT DEBUG] No transcript JSON files found in {course_dir}")
                     else:
                         print(f"[TRANSCRIPT DEBUG] Directory does not exist: {course_dir}")
                 

@@ -140,10 +140,10 @@ export default function CourseChaptersPage() {
                   <BookOpen className="h-8 w-8" />
                 </div>
                 <h3 className="mb-2 text-lg font-semibold text-slate-900">
-                  수강 가능한 챕터가 없습니다
+                  수강 가능한 강의가 없습니다
                 </h3>
                 <p className="text-sm text-slate-600">
-                  챕터가 아직 준비 중이거나 업로드되지 않았습니다
+                  강의가 아직 준비 중이거나 업로드되지 않았습니다
                 </p>
               </div>
             ) : (

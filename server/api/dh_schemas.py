@@ -42,8 +42,7 @@ class RegisterInstructorRequest(BaseModel):
     password: str = Field(..., min_length=8, description="비밀번호 (최소 8자)")
     profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
     bio: Optional[str] = Field(default=None, description="자기소개")
-    phone: Optional[str] = Field(default=None, description="전화번호")
-    specialization: Optional[str] = Field(default=None, description="전문 분야")
+    specialization: str = Field(..., description="전문 분야 (필수)")
     # 회원가입 시 함께 등록할 수 있는 초기 강의 정보 (선택사항)
     initial_courses: Optional[list[dict]] = Field(default=None, description="초기 강의 정보 목록")
     
