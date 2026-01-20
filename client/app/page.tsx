@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { BookOpen, GraduationCap, PlayCircle, Settings, Upload } from "lucide-react";
+import { BookOpen, GraduationCap, PlayCircle, Settings } from "lucide-react";
 import { isAuthenticated, getUser, getToken } from "@/lib/auth";
 import LoginModal from "@/components/LoginModal";
 import RegisterModal from "@/components/RegisterModal";
@@ -101,16 +101,6 @@ export default function Home() {
 
         {/* 메인 액션 버튼 - 학생 중심 */}
         <div className="mb-20 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-          {/* 강사 로그인 시에만 강의 업로드 버튼 표시 */}
-          {isInstructor && (
-            <Link
-              href="/instructor/upload"
-              className="group flex items-center gap-3 rounded-xl bg-blue-600 px-8 py-4 text-base font-semibold text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl"
-            >
-              <Upload className="h-5 w-5" />
-              <span>강의 업로드</span>
-            </Link>
-          )}
           <Link
             href="/student/courses"
             className="group flex items-center gap-3 rounded-xl border-2 border-slate-300 bg-white px-8 py-4 text-base font-semibold text-slate-700 transition-all hover:border-blue-500 hover:bg-blue-50"
