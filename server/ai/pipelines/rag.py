@@ -100,7 +100,9 @@ class RAGPipeline:
         *, 
         course_id: str, 
         k: int = 4,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        current_time: Optional[float] = None,
+        instructor_info: Optional[Dict[str, Any]] = None
     ) -> dict:
         """
         Retrieval with course_id filter + LLM synthesis.
@@ -118,11 +120,24 @@ class RAGPipeline:
                 query_embeddings = embed_texts([question], self.settings)
             except ValueError as e:
                 # API 할당량 초과 등 임베딩 생성 실패 시
+                error_msg = str(e)
+                if "할당량" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg.lower():
+                    detailed_msg = (
+                        "⚠️ OpenAI API 할당량이 초과되었습니다.\n\n"
+                        "해결 방법:\n"
+                        "1. OpenAI 대시보드(https://platform.openai.com/account/billing)에서 크레딧 잔액 확인\n"
+                        "2. 결제 정보 등록 및 크레딧 추가\n"
+                        "3. Rate Limits(https://platform.openai.com/account/limits) 확인\n\n"
+                        f"에러 상세: {error_msg}"
+                    )
+                else:
+                    detailed_msg = f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {error_msg}"
+                
                 return {
                     "question": question,
                     "documents": [],
                     "metadatas": [],
-                    "answer": f"⚠️ 임베딩 생성 중 오류가 발생했습니다: {str(e)}",
+                    "answer": detailed_msg,
                 }
             results = self.collection.query(
                 query_embeddings=query_embeddings,
@@ -182,41 +197,71 @@ class RAGPipeline:
                 print(f"[RAG DEBUG] ⚠️ Could not check vector DB: {e}")
         
         # 페르소나를 명시적으로 별도 검색 (질문과 관계없이 항상 가져오기)
+        # ⚠️ query_texts를 사용하면 ChromaDB가 내부적으로 임베딩을 생성할 수 있으므로
+        # get() 메서드만 사용하여 불필요한 API 호출 방지
         persona_doc = None
         try:
-            # 방법 1: ID로 직접 가져오기 시도
-            try:
-                persona_results = self.collection.get(
-                    ids=[f"{course_id}-persona"],
-                    include=["documents", "metadatas"],
-                )
-                if persona_results.get("documents") and len(persona_results["documents"]) > 0:
-                    persona_doc = persona_results["documents"][0]
-                    print(f"[RAG DEBUG] ✅ 페르소나를 ID로 검색했습니다 (course_id={course_id})")
-            except Exception:
-                # 방법 2: where 필터로 검색 (get이 실패하면 query 사용)
-                persona_query = self.collection.query(
-                    query_texts=["persona"],  # 페르소나 검색용 더미 텍스트
-                    n_results=1,
-                    include=["documents", "metadatas"],
-                    where={"course_id": course_id, "type": "persona"},
-                )
-                if persona_query.get("documents") and len(persona_query["documents"]) > 0:
-                    persona_doc = persona_query["documents"][0][0]  # query는 2차원 배열 반환
-                    print(f"[RAG DEBUG] ✅ 페르소나를 where 필터로 검색했습니다 (course_id={course_id})")
-                else:
-                    print(f"[RAG DEBUG] ⚠️ 페르소나가 벡터 DB에 없습니다 (course_id={course_id})")
+            # ID로 직접 가져오기 (임베딩 생성 없음)
+            persona_results = self.collection.get(
+                ids=[f"{course_id}-persona"],
+                include=["documents", "metadatas"],
+            )
+            if persona_results.get("documents") and len(persona_results["documents"]) > 0:
+                persona_doc = persona_results["documents"][0]
+                print(f"[RAG DEBUG] ✅ 페르소나를 ID로 검색했습니다 (course_id={course_id}, 임베딩 호출 없음)")
+            else:
+                print(f"[RAG DEBUG] ⚠️ 페르소나가 벡터 DB에 없습니다 (course_id={course_id})")
         except Exception as e:
-            print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류: {e}")
+            # get()이 실패하면 (예: ID가 없거나 컬렉션 문제) 페르소나 없이 진행
+            print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류 (get 실패): {e}")
+            # ⚠️ query_texts를 사용하지 않음 - 불필요한 임베딩 API 호출 방지
         
-        # 검색 결과에서 페르소나 제거 (중복 방지)
+        # 검색 결과에서 페르소나 제거 및 시간 기반 필터링/정렬
         filtered_docs = []
         filtered_metas = []
+        doc_scores = []  # 시간 기반 점수 (가까울수록 높은 점수)
+        
         for i, doc in enumerate(docs):
             meta = metas[i] if i < len(metas) else {}
             if meta.get("type") != "persona":
+                # 시간 기반 점수 계산 (current_time이 있는 경우)
+                score = 0.0
+                if current_time is not None and current_time > 0:
+                    start_time = meta.get("start_time")
+                    end_time = meta.get("end_time")
+                    if start_time is not None or end_time is not None:
+                        # 현재 시간과의 거리 계산
+                        if start_time is not None and end_time is not None:
+                            # segment 범위 내에 있으면 높은 점수
+                            if start_time <= current_time <= end_time:
+                                score = 100.0
+                            else:
+                                # 거리에 따라 점수 감소
+                                mid_time = (start_time + end_time) / 2
+                                distance = abs(mid_time - current_time)
+                                score = max(0, 100.0 - distance / 10)  # 10초당 10점 감소
+                        elif start_time is not None:
+                            distance = abs(start_time - current_time)
+                            score = max(0, 100.0 - distance / 10)
+                        elif end_time is not None:
+                            distance = abs(end_time - current_time)
+                            score = max(0, 100.0 - distance / 10)
+                
                 filtered_docs.append(doc)
                 filtered_metas.append(meta)
+                doc_scores.append(score)
+        
+        # 시간 기반 점수가 있으면 정렬 (높은 점수부터)
+        if current_time is not None and current_time > 0 and any(s > 0 for s in doc_scores):
+            # 점수와 거리를 함께 고려하여 정렬
+            sorted_items = sorted(
+                zip(filtered_docs, filtered_metas, doc_scores),
+                key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
+                reverse=True
+            )
+            filtered_docs = [doc for doc, _, _ in sorted_items]
+            filtered_metas = [meta for _, meta, _ in sorted_items]
+            print(f"[RAG DEBUG] 📍 Time-based sorting applied (current_time={current_time}s), top score: {max(doc_scores) if doc_scores else 0:.1f}")
         
         answer = self._llm_answer(
             question, 
@@ -224,7 +269,8 @@ class RAGPipeline:
             filtered_metas, 
             course_id,
             conversation_history=conversation_history,
-            persona_doc=persona_doc  # 명시적으로 페르소나 전달
+            persona_doc=persona_doc,  # 명시적으로 페르소나 전달
+            instructor_info=instructor_info  # 강사 정보 전달
         )
         return {
             "question": question,
@@ -240,7 +286,8 @@ class RAGPipeline:
         metas: List[Dict[str, Any]], 
         course_id: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        persona_doc: Optional[str] = None
+        persona_doc: Optional[str] = None,
+        instructor_info: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         LLM synthesis with persona prompt and conversation history.
@@ -258,22 +305,88 @@ class RAGPipeline:
             context_parts.append(ctx)
         context = "\n".join(context_parts) if context_parts else ""
 
-        # 저장된 페르소나 프롬프트 사용 (있으면), 없으면 검색된 문서로 생성
-        if persona_doc:
+        # DB에서 persona_profile 및 강의 정보 로드 시도 (우선순위 1)
+        persona = None
+        persona_profile_json = None
+        course_info = None
+        try:
+            from sqlmodel import Session
+            from core.db import engine
+            from core.models import Course
+            
+            with Session(engine) as session:
+                course = session.get(Course, course_id)
+                if course:
+                    # 강의 정보 저장 (강의명, 카테고리)
+                    course_info = {
+                        "title": course.title,
+                        "category": course.category,
+                    }
+                    
+                    if course.persona_profile:
+                        persona_profile_json = course.persona_profile
+                        import json
+                        persona_dict = json.loads(persona_profile_json)
+                        from ai.style_analyzer import create_persona_prompt
+                        persona = create_persona_prompt(persona_dict)
+                        print(f"[RAG DEBUG] ✅ DB에서 persona_profile 로드 (course_id={course_id})")
+        except Exception as e:
+            print(f"[RAG DEBUG] ⚠️ DB에서 persona_profile 로드 실패: {e}")
+        
+        # DB에서 로드 실패 시 벡터 DB의 persona 사용 (우선순위 2)
+        if not persona and persona_doc:
             persona = persona_doc
-            print(f"[RAG DEBUG] ✅ 저장된 페르소나 프롬프트 사용 (course_id={course_id})")
-        else:
-            # 페르소나 프롬프트를 찾지 못한 경우, 검색된 문서로 생성 (fallback)
+            # ⚠️ 강사 정보는 ChromaDB에 저장되지 않으므로, DB에서 로드한 정보를 시스템 프롬프트에 동적으로 추가
+            # (이 부분은 ChromaDB에 저장되지 않고, 런타임에 시스템 프롬프트에만 추가됨)
+            if instructor_info:
+                instructor_context = ""
+                name = instructor_info.get("name", "")
+                bio = instructor_info.get("bio", "")
+                specialization = instructor_info.get("specialization", "")
+                
+                if name or specialization or bio:
+                    if name:
+                        instructor_context += f"**강사 이름**: {name}\n"
+                    if specialization:
+                        instructor_context += f"**전문 분야**: {specialization}\n"
+                    if bio:
+                        instructor_context += f"**자기소개/배경**: {bio}\n"
+                    
+                    if instructor_context and "강사 정보" not in persona:
+                        persona = f"{persona}\n\n**강사 정보**:\n{instructor_context}"
+            print(f"[RAG DEBUG] ✅ 벡터 DB의 페르소나 프롬프트 사용 (course_id={course_id})")
+        elif not persona:
+            # 페르소나 프롬프트를 찾지 못한 경우, 검색된 문서로 생성 (fallback, 우선순위 3)
+            # ⚠️ 강사 정보는 ChromaDB에 저장하지 않음 (DB에서 동적으로 로드)
             print(f"[RAG DEBUG] ⚠️ 저장된 페르소나를 찾지 못해 검색된 문서로 생성 (fallback, course_id={course_id})")
-            persona = self.generate_persona_prompt(course_id=course_id, sample_texts=docs)
+            persona = self.generate_persona_prompt(
+                course_id=course_id, 
+                sample_texts=docs,
+                instructor_info=instructor_info,  # 분석 시에만 참고
+                include_instructor_info=False  # ChromaDB에 저장하지 않음
+            )
+        
+        # Strict Grounding Rule (최상단에 명시)
+        strict_grounding_rule = """**⚠️ Strict Grounding Rule (필수 준수):**
+Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
+- 강의 컨텍스트에 명확히 언급된 내용만 답변하세요.
+- 강의에서 설명하지 않은 내용은 AI가 아무리 잘 알고 있어도 답변하지 마세요.
+- 강의 컨텍스트에 없는 내용을 추측하거나 일반 지식으로 보완하지 마세요.
+- 모르면 정직하게 "이 강의에서는 다루지 않은 내용입니다"라고 답변하세요.
+
+이 규칙은 모든 답변에 우선 적용됩니다. 위반 시 부정확한 정보 제공으로 이어질 수 있습니다.
+
+---
+
+"""
         
         # 오디오 지식 우선, GPT 지식 보조 프롬프트
         if context:
             knowledge_instruction = (
-                "중요: 아래 '강의 컨텍스트'에 있는 내용이 가장 우선순위가 높습니다. "
-                "먼저 강의 컨텍스트에서 답을 찾으세요. "
+                "**중요**: 아래 '강의 컨텍스트'에 있는 내용만 답변하세요. "
+                "강의 컨텍스트에서 답을 찾으세요. "
                 "강의 컨텍스트에 명확한 답이 있으면 그대로 사용하세요. "
-                "강의 컨텍스트에 없는 내용이 필요할 때만 일반적인 지식으로 보완하세요.\n\n"
+                "강의 컨텍스트에 없는 내용은 답변하지 마세요.\n\n"
                 "강의 컨텍스트:\n"
                 f"{context}\n\n"
                 "위 강의 컨텍스트를 바탕으로 질문에 답변하세요. "
@@ -283,8 +396,8 @@ class RAGPipeline:
             knowledge_instruction = (
                 "⚠️ 경고: 강의 컨텍스트를 찾지 못했습니다. "
                 "이는 강의가 아직 처리되지 않았거나, 벡터 DB에 데이터가 없을 수 있습니다. "
-                "일반적인 지식으로 답변하되, 강의 범위와 관련된 내용임을 명시하세요. "
-                "강의 내용을 확인할 수 없으므로 정확한 답변을 제공하기 어렵습니다."
+                "강의 내용을 확인할 수 없으므로 정확한 답변을 제공하기 어렵습니다. "
+                "이 강의에서는 다루지 않은 내용이거나 아직 처리되지 않은 강의일 수 있습니다."
             )
             print(f"[RAG DEBUG] ⚠️ No context found for course_id={course_id}, question: {question[:50]}")
             # 컨텍스트가 없으면 명시적으로 표시 (상위 레벨에서 transcript 파일 사용하도록)
@@ -296,16 +409,99 @@ class RAGPipeline:
                 "answer": answer,
             }
         
+        # 강의 정보 추가 (강의명, 카테고리)
+        course_info_text = ""
+        course_title = None
+        course_category = None
+        if course_info:
+            course_title = course_info.get("title")
+            course_category = course_info.get("category")
+            if course_title:
+                course_info_text += f"**강의명**: {course_title}\n"
+            if course_category:
+                course_info_text += f"**카테고리**: {course_category}\n"
+        
+        # 강사 이름 추출 (페르소나나 instructor_info에서)
+        instructor_name = None
+        if instructor_info and instructor_info.get("name"):
+            instructor_name = instructor_info.get("name")
+        elif persona and "**강사 이름**" in persona:
+            # 페르소나에서 강사 이름 추출
+            import re
+            match = re.search(r'\*\*강사 이름\*\*:\s*([^\n]+)', persona)
+            if match:
+                instructor_name = match.group(1).strip()
+        
+        # 강의명 기반 주제 추출 (강의명에서 핵심 주제 추출)
+        subject = None
+        if course_title:
+            # 카테고리가 있으면 카테고리를 주제로 우선 사용
+            if course_category:
+                subject = course_category.strip()
+            else:
+                # 강의명에서 핵심 주제 추출
+                title = course_title.strip()
+                
+                # 주요 과목 키워드 리스트
+                subject_keywords = [
+                    "영어", "수학", "국어", "과학", "물리", "화학", "생물", "지구과학",
+                    "역사", "한국사", "세계사", "지리", "사회", "경제", "정치", "윤리",
+                    "음악", "미술", "체육", "기술", "가정", "정보", "컴퓨터",
+                    "중국어", "일본어", "프랑스어", "독일어", "스페인어", "러시아어",
+                    "문학", "작문", "독서", "논술"
+                ]
+                
+                # 강의명에서 과목 키워드 찾기
+                found_subject = None
+                for keyword in subject_keywords:
+                    if keyword in title:
+                        found_subject = keyword
+                        break
+                
+                if found_subject:
+                    subject = found_subject
+                else:
+                    # 키워드를 찾지 못한 경우, 첫 단어를 주제로 사용
+                    # 예: "영어 수특" → "영어", "수학 기초" → "수학"
+                    first_word = title.split()[0] if title.split() else title
+                    subject = first_word
+        
         sys_prompt = (
+            strict_grounding_rule +
             f"{persona}\n\n"
+        )
+        
+        # 강의 정보가 있으면 추가
+        if course_info_text:
+            sys_prompt += f"**강의 정보**:\n{course_info_text}\n"
+        
+        # 강사 정체성 명시 (강의명 기반)
+        identity_text = ""
+        if instructor_name and subject:
+            identity_text = f"**중요**: 당신의 이름은 **{instructor_name}**입니다. 당신은 **{subject}**를 가르치는 **{subject} 선생님**입니다. 당신은 **{course_title}** 강의를 가르치고 있습니다.\n\n"
+        elif instructor_name:
+            identity_text = f"**중요**: 당신의 이름은 **{instructor_name}**입니다. 당신은 이 강의를 가르치는 강사 **{instructor_name}**입니다.\n\n"
+        elif subject:
+            identity_text = f"**중요**: 당신은 **{subject}**를 가르치는 **{subject} 선생님**입니다. 당신은 **{course_title}** 강의를 가르치고 있습니다.\n\n"
+        
+        if identity_text:
+            sys_prompt += identity_text
+        
+        sys_prompt += (
+            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+            "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요. "
             "위 말투 지시사항을 정확히 따라 답변하세요.\n\n"
             f"{knowledge_instruction}\n\n"
             "답변 규칙:\n"
-            "- 강의 컨텍스트의 내용을 최우선으로 사용하세요.\n"
-            "- 강의 컨텍스트에 없는 내용은 일반 지식으로 보완 가능하지만, 강의 내용임을 강조하세요.\n"
+            "- **Strict Grounding Rule을 우선 준수**: Context에 없는 내용은 절대 답변하지 마세요.\n"
+            "- 강의 컨텍스트의 내용만 사용하세요.\n"
             "- 모르면 모른다고 말하세요.\n"
             "- 코스 범위 밖 질문은 답하지 않습니다.\n"
-            "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요."
+            "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
+            "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
+            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 카테고리를 자연스럽게 답변하세요.\n"
+            "- **정체성 인식**: 당신은 위에 명시된 주제(예: 영어, 수학 등)를 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/카테고리에 명시된 주제의 선생님으로서 답변하세요. 예를 들어, 강의명이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 고전 시가를 읽는 수업이어도 당신은 영어 선생님으로서 답변하세요."
         )
 
         # 메시지 구성 (대화 히스토리 포함)
@@ -350,22 +546,52 @@ class RAGPipeline:
                 return f"⚠️ LLM 응답 생성 중 오류 발생: {error_msg}"
 
     def generate_persona_prompt(
-        self, *, course_id: str, sample_texts: list[str]
+        self, *, course_id: str, sample_texts: list[str], instructor_info: Optional[Dict[str, Any]] = None, include_instructor_info: bool = False
     ) -> str:
         """
         Analyze speaking style from sample texts and generate persona prompt.
-        Uses LLM to extract stylistic patterns (speech patterns, tone, expressions).
+        강사 정보는 분석 시에만 참고하고, 최종 페르소나 프롬프트에는 포함하지 않음 (DB에서 동적으로 로드).
+        
+        Args:
+            course_id: Course identifier
+            sample_texts: List of sample texts from lectures
+            instructor_info: Optional dictionary with instructor information (분석 시에만 참고):
+                - name: Instructor name
+                - bio: Instructor biography/self-introduction
+                - specialization: Instructor's field of expertise
+            include_instructor_info: If True, include instructor info in final prompt (기본값: False)
+                ⚠️ False로 설정하여 ChromaDB에는 스타일만 저장하고, 강사 정보는 DB에서 동적으로 로드
         """
+        # 강사 정보 구성 (include_instructor_info가 True일 때만 최종 프롬프트에 포함)
+        instructor_context = ""
+        if instructor_info and include_instructor_info:
+            name = instructor_info.get("name", "")
+            bio = instructor_info.get("bio", "")
+            specialization = instructor_info.get("specialization", "")
+            
+            if name:
+                instructor_context += f"강사 이름: {name}\n"
+            if specialization:
+                instructor_context += f"전문 분야: {specialization}\n"
+            if bio:
+                instructor_context += f"자기소개/배경: {bio}\n"
+        
         if not sample_texts:
-            return f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다."
+            base_prompt = f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다."
+            if instructor_context:
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}\n위 강사 정보를 바탕으로 답변하세요."
+            return base_prompt
         
         if OpenAI is None or not self.settings.openai_api_key:
             # Fallback to simple prompt if API key is missing
             sample = sample_texts[0][:500] if sample_texts else ""
-            return (
+            base_prompt = (
                 f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
                 f"아래 샘플을 참고하여 답변하세요:\n{sample}"
             )
+            if instructor_context:
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}"
+            return base_prompt
         
         # Combine sample texts (up to 3000 chars to avoid token limits)
         combined_text = "\n\n".join(sample_texts)
@@ -375,6 +601,22 @@ class RAGPipeline:
         # Use LLM to analyze speaking style
         client = OpenAI(api_key=self.settings.openai_api_key)
         
+        # 강사 정보를 분석 프롬프트에 포함 (분석 시에만 참고, 최종 프롬프트에는 포함하지 않음)
+        instructor_section = ""
+        if instructor_info:  # include_instructor_info와 무관하게 분석 시에는 참고
+            name = instructor_info.get("name", "")
+            bio = instructor_info.get("bio", "")
+            specialization = instructor_info.get("specialization", "")
+            temp_context = ""
+            if name:
+                temp_context += f"강사 이름: {name}\n"
+            if specialization:
+                temp_context += f"전문 분야: {specialization}\n"
+            if bio:
+                temp_context += f"자기소개/배경: {bio}\n"
+            if temp_context:
+                instructor_section = f"\n\n강사 정보:\n{temp_context}\n위 강사 정보도 참고하여 말투와 배경지식을 분석하세요."
+        
         analysis_prompt = f"""다음은 강사의 강의 텍스트 샘플입니다. 이 강사의 말투와 스타일을 분석해주세요.
 
 분석할 요소:
@@ -382,7 +624,7 @@ class RAGPipeline:
 2. 어투 (정중함, 친근함, 격식, 캐주얼 등)
 3. 자주 사용하는 표현이나 습관적 말투
 4. 문장 구조 (짧은 문장 vs 긴 문장)
-5. 특징적인 말버릇이나 반복되는 표현
+5. 특징적인 말버릇이나 반복되는 표현{instructor_section}
 
 강의 샘플:
 {combined_text}
@@ -411,7 +653,12 @@ class RAGPipeline:
             style_analysis = resp.choices[0].message.content
             
             # Generate persona prompt based on analysis
-            persona_instruction = f"""당신은 course_id={course_id} 강사의 말투와 스타일을 정확하게 모방하는 AI 챗봇입니다.
+            # ⚠️ 강사 정보는 최종 프롬프트에 포함하지 않음 (DB에서 동적으로 로드)
+            instructor_info_section = ""
+            if instructor_context:  # include_instructor_info가 True일 때만 포함
+                instructor_info_section = f"\n\n강사 정보:\n{instructor_context}\n위 강사 정보를 바탕으로 배경지식과 전문성을 활용하여 답변하세요."
+            
+            persona_instruction = f"""당신은 course_id={course_id} 강사의 말투와 스타일을 정확하게 모방하는 AI 챗봇입니다.{instructor_info_section}
 
 강사 말투 분석:
 {style_analysis}
@@ -428,17 +675,23 @@ class RAGPipeline:
             error_msg = f"OpenAI API 오류 (페르소나 생성): {str(e)}"
             print(f"ERROR [Persona]: {error_msg}")
             sample = sample_texts[0][:500] if sample_texts else ""
-            return (
+            base_prompt = (
                 f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
                 f"페르소나 생성 중 오류가 발생했습니다: {error_msg}. "
                 f"아래 샘플을 참고하여 답변하세요:\n{sample}"
             )
+            if instructor_context:  # include_instructor_info가 True일 때만 포함
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}"
+            return base_prompt
         except Exception as e:
             print(f"Warning: Failed to analyze persona style: {e}")
             # Fallback to simple prompt
             sample = sample_texts[0][:500] if sample_texts else ""
-            return (
+            base_prompt = (
                 f"당신은 course_id={course_id} 강사의 말투를 모방한 AI입니다. "
                 f"아래 샘플을 참고하여 답변하세요:\n{sample}"
             )
+            if instructor_context:  # include_instructor_info가 True일 때만 포함
+                return f"{base_prompt}\n\n강사 정보:\n{instructor_context}"
+            return base_prompt
 

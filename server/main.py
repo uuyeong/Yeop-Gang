@@ -3,6 +3,9 @@ from pathlib import Path
 import os
 import shutil
 
+# ChromaDB telemetry 비활성화 (가장 먼저 설정 - ChromaDB 모듈 import 전)
+os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,6 +63,21 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:
+        # 디버깅: API 키 로드 확인
+        from ai.config import AISettings
+        settings = AISettings()
+        if settings.openai_api_key:
+            api_key_preview = settings.openai_api_key[:10] + "..." + settings.openai_api_key[-4:] if len(settings.openai_api_key) > 14 else "***"
+            print(f"[DEBUG] [Main] ✅ OPENAI_API_KEY loaded on startup: {api_key_preview}")
+        else:
+            print(f"[DEBUG] [Main] ⚠️ OPENAI_API_KEY is None on startup!")
+            # os.environ에서 직접 확인
+            env_key = os.environ.get("OPENAI_API_KEY")
+            if env_key:
+                print(f"[DEBUG] [Main] ⚠️ But os.environ has OPENAI_API_KEY: {env_key[:10]}...")
+            else:
+                print(f"[DEBUG] [Main] ⚠️ os.environ also does not have OPENAI_API_KEY")
+        
         # ffmpeg 경로를 환경 변수에 추가 (whisper 라이브러리가 사용)
         ffmpeg_path = shutil.which("ffmpeg")
         
@@ -88,7 +106,8 @@ def create_app() -> FastAPI:
             print("⚠️ Warning: ffmpeg not found in PATH. Whisper STT may fail.")
             print("💡 Please install ffmpeg: https://ffmpeg.org/download.html")
         
-        # dh: 새로운 모델들도 초기화 (Student, CourseEnrollment)
+        # dh: 모든 모델을 import하여 SQLModel.metadata에 등록 (데이터베이스 생성에 필요)
+        from core.models import Instructor, Course, Video, ChatSession
         from core.dh_models import Student, CourseEnrollment
         init_db()
 

@@ -6,7 +6,7 @@ from fastapi.params import Form, File
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlmodel import Session, select
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 import os
 import re
 
@@ -22,11 +22,20 @@ from api.schemas import (
     QuizResponse,
     QuizSubmitRequest,
     QuizResult,
+    RegisterInstructorRequest,
+    LoginRequest,
+    TokenResponse,
 )
+from datetime import datetime
 from core.db import get_session
 from core.models import Course, CourseStatus, Instructor, Video
 from core.storage import save_course_assets
 from core.tasks import enqueue_processing_task
+from core.dh_auth import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+)
 from ai.config import AISettings
 
 router = APIRouter(prefix="", tags=["api"])
@@ -41,6 +50,223 @@ def get_pipeline(settings: AISettings = Depends(AISettings)) -> RAGPipeline:
     return RAGPipeline(settings)
 
 
+def _generate_persona_response(
+    user_message: str,
+    course_id: str,
+    session: Session,
+    pipeline: RAGPipeline,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    context: Optional[str] = None
+) -> str:
+    """
+    페르소나가 적용된 LLM 응답 생성 (인사말, 피드백, 오류 메시지 등에 사용)
+    
+    Args:
+        user_message: 사용자 메시지
+        course_id: 강의 ID
+        session: DB 세션
+        pipeline: RAG 파이프라인
+        conversation_history: 대화 히스토리 (선택)
+        context: 추가 컨텍스트 (선택)
+    
+    Returns:
+        페르소나가 적용된 응답 텍스트
+    """
+    try:
+        from ai.config import AISettings
+        from core.models import Course, Instructor
+        from ai.style_analyzer import create_persona_prompt
+        import json
+        
+        settings = AISettings()
+        
+        # 강사 정보 및 강의 정보 가져오기
+        instructor_info = None
+        course_info = None
+        course = session.get(Course, course_id)
+        if course:
+            # 강의 정보 저장
+            course_info = {
+                "title": course.title,
+                "category": course.category,
+            }
+            
+            instructor = session.get(Instructor, course.instructor_id)
+            if instructor:
+                instructor_info = {
+                    "name": instructor.name,
+                    "bio": instructor.bio,
+                    "specialization": instructor.specialization,
+                }
+        
+        # 페르소나 로드 (DB 우선)
+        persona = None
+        if course and course.persona_profile:
+            try:
+                persona_dict = json.loads(course.persona_profile)
+                persona = create_persona_prompt(persona_dict)
+                if instructor_info:
+                    instructor_context = ""
+                    if instructor_info.get("name"):
+                        instructor_context += f"강사 이름: {instructor_info['name']}\n"
+                    if instructor_info.get("specialization"):
+                        instructor_context += f"전문 분야: {instructor_info['specialization']}\n"
+                    if instructor_info.get("bio"):
+                        instructor_context += f"자기소개/배경: {instructor_info['bio']}\n"
+                    if instructor_context and "강사 정보" not in persona:
+                        persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
+            except Exception as e:
+                print(f"[PERSONA RESPONSE] ⚠️ 페르소나 로드 실패: {e}")
+        
+        # 페르소나가 없으면 기본 페르소나 사용
+        if not persona:
+            persona = (
+                "당신은 친근하고 전문적인 강사입니다. "
+                "학생들에게 자연스럽고 이해하기 쉽게 설명합니다."
+            )
+            if instructor_info:
+                instructor_context = ""
+                if instructor_info.get("name"):
+                    instructor_context += f"강사 이름: {instructor_info['name']}\n"
+                if instructor_info.get("specialization"):
+                    instructor_context += f"전문 분야: {instructor_info['specialization']}\n"
+                if instructor_info.get("bio"):
+                    instructor_context += f"자기소개/배경: {instructor_info['bio']}\n"
+                if instructor_context:
+                    persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
+        
+        # 강의 정보 추가
+        course_info_text = ""
+        course_title = None
+        course_category = None
+        if course_info:
+            course_title = course_info.get("title")
+            course_category = course_info.get("category")
+            if course_title:
+                course_info_text += f"**강의명**: {course_title}\n"
+            if course_category:
+                course_info_text += f"**카테고리**: {course_category}\n"
+        
+        # 강사 이름 추출
+        instructor_name = None
+        if instructor_info and instructor_info.get("name"):
+            instructor_name = instructor_info.get("name")
+        elif persona and "**강사 이름**" in persona:
+            # 페르소나에서 강사 이름 추출
+            import re
+            match = re.search(r'\*\*강사 이름\*\*:\s*([^\n]+)', persona)
+            if match:
+                instructor_name = match.group(1).strip()
+        
+        # 강의명 기반 주제 추출 (강의명에서 핵심 주제 추출)
+        subject = None
+        if course_title:
+            # 카테고리가 있으면 카테고리를 주제로 우선 사용
+            if course_category:
+                subject = course_category.strip()
+            else:
+                # 강의명에서 핵심 주제 추출
+                title = course_title.strip()
+                
+                # 주요 과목 키워드 리스트
+                subject_keywords = [
+                    "영어", "수학", "국어", "과학", "물리", "화학", "생물", "지구과학",
+                    "역사", "한국사", "세계사", "지리", "사회", "경제", "정치", "윤리",
+                    "음악", "미술", "체육", "기술", "가정", "정보", "컴퓨터",
+                    "중국어", "일본어", "프랑스어", "독일어", "스페인어", "러시아어",
+                    "문학", "작문", "독서", "논술"
+                ]
+                
+                # 강의명에서 과목 키워드 찾기
+                found_subject = None
+                for keyword in subject_keywords:
+                    if keyword in title:
+                        found_subject = keyword
+                        break
+                
+                if found_subject:
+                    subject = found_subject
+                else:
+                    # 키워드를 찾지 못한 경우, 첫 단어를 주제로 사용
+                    # 예: "영어 수특" → "영어", "수학 기초" → "수학"
+                    first_word = title.split()[0] if title.split() else title
+                    subject = first_word
+        
+        # 시스템 프롬프트 구성
+        sys_prompt = (
+            f"{persona}\n\n"
+        )
+        
+        # 강의 정보가 있으면 추가
+        if course_info_text:
+            sys_prompt += f"**강의 정보**:\n{course_info_text}\n"
+        
+        # 강사 정체성 명시 (강의명 기반)
+        identity_text = ""
+        if instructor_name and subject:
+            identity_text = f"**중요**: 당신의 이름은 **{instructor_name}**입니다. 당신은 **{subject}**를 가르치는 **{subject} 선생님**입니다. 당신은 **{course_title}** 강의를 가르치고 있습니다.\n\n"
+        elif instructor_name:
+            identity_text = f"**중요**: 당신의 이름은 **{instructor_name}**입니다. 당신은 이 강의를 가르치는 강사 **{instructor_name}**입니다.\n\n"
+        elif subject:
+            identity_text = f"**중요**: 당신은 **{subject}**를 가르치는 **{subject} 선생님**입니다. 당신은 **{course_title}** 강의를 가르치고 있습니다.\n\n"
+        
+        if identity_text:
+            sys_prompt += identity_text
+        
+        sys_prompt += (
+            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문이나 상황에 답변할 때, "
+            "강사로서 자연스럽고 친근하게 대화하세요. "
+            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+            "강의를 가르치는 선생님으로서 학생에게 말하는 톤으로 답변하세요.\n\n"
+            "답변 규칙:\n"
+            "- 강사로서 자연스럽고 친근한 말투를 사용하세요.\n"
+            "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
+            "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
+            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 카테고리를 자연스럽게 답변하세요.\n"
+            "- **강사 소개 질문**: 학생이 '누구세요?', '선생님 이름이 뭐예요?', '강사님은 누구세요?' 같은 질문을 하면, 위에 명시된 강사 이름을 자연스럽게 답변하세요.\n"
+            "- **정체성 인식**: 당신은 위에 명시된 주제(예: 영어, 수학 등)를 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/카테고리에 명시된 주제의 선생님으로서 답변하세요."
+        )
+        
+        if context:
+            sys_prompt += f"\n\n추가 컨텍스트:\n{context}"
+        
+        # LLM 호출
+        if not settings.openai_api_key:
+            return "죄송합니다. OpenAI API 키가 설정되지 않았습니다."
+        
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+        
+        messages = [{"role": "system", "content": sys_prompt}]
+        
+        # 대화 히스토리 추가
+        if conversation_history:
+            recent_history = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+            for msg in recent_history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role in ["user", "assistant"] and content:
+                    messages.append({"role": role, "content": content})
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        response = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
+        )
+        
+        return response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
+        
+    except Exception as e:
+        print(f"[PERSONA RESPONSE] ❌ 오류: {e}")
+        import traceback
+        print(f"[PERSONA RESPONSE] Traceback: {traceback.format_exc()}")
+        # 오류 발생 시 기본 응답 (페르소나 없이)
+        return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
+
+
 def _serve_video_file(file_path: Path, media_type: str):
     """
     FastAPI FileResponse를 사용하여 비디오 파일 제공
@@ -52,6 +278,178 @@ def _serve_video_file(file_path: Path, media_type: str):
         headers={
             "Accept-Ranges": "bytes",
         }
+    )
+
+
+# ==================== 인증 엔드포인트 ====================
+
+@router.post("/auth/register/instructor", response_model=TokenResponse)
+async def register_instructor(
+    payload: RegisterInstructorRequest,
+    session: Session = Depends(get_session),
+) -> TokenResponse:
+    """강사 등록 - 프로필 정보와 함께 강사 계정 생성"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info(f"강사 회원가입 시도: ID={payload.id}, Email={payload.email}")
+        
+        # 기존 강사 확인 (ID 또는 이메일 중복 체크)
+        existing_by_id = session.get(Instructor, payload.id)
+        if existing_by_id:
+            logger.warning(f"강사 ID 중복: {payload.id}")
+            raise HTTPException(
+                status_code=400,
+                detail="이미 존재하는 강사 ID입니다.",
+            )
+        
+        # 이메일 중복 확인
+        existing_by_email = session.exec(
+            select(Instructor).where(Instructor.email == payload.email)
+        ).first()
+        if existing_by_email:
+            logger.warning(f"이메일 중복: {payload.email}")
+            raise HTTPException(
+                status_code=400,
+                detail="이미 등록된 이메일입니다.",
+            )
+        
+        # 비밀번호 해싱
+        try:
+            password_hash = get_password_hash(payload.password)
+        except Exception as e:
+            logger.error(f"비밀번호 해싱 실패: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="비밀번호 처리 중 오류가 발생했습니다.",
+            )
+        
+        # 강사 생성 (프로필 정보 포함)
+        try:
+            instructor = Instructor(
+                id=payload.id,
+                name=payload.name,
+                email=payload.email,
+                password_hash=password_hash,
+                profile_image_url=payload.profile_image_url,
+                bio=payload.bio,
+                phone=payload.phone,
+                specialization=payload.specialization,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            session.add(instructor)
+            session.commit()
+            session.refresh(instructor)
+            logger.info(f"강사 생성 성공: ID={instructor.id}")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"강사 생성 실패: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"강사 등록 중 오류가 발생했습니다: {str(e)}",
+            )
+        
+        # 초기 강의 정보가 있으면 함께 등록
+        if payload.initial_courses:
+            try:
+                for course_info in payload.initial_courses:
+                    course_id = course_info.get("course_id") or course_info.get("id")
+                    course_title = course_info.get("title") or course_info.get("name")
+                    if course_id and course_title:
+                        course = Course(
+                            id=course_id,
+                            instructor_id=instructor.id,
+                            title=course_title,
+                            status=CourseStatus.processing,
+                            created_at=datetime.utcnow(),
+                            updated_at=datetime.utcnow(),
+                        )
+                        session.add(course)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"강의 등록 실패: {e}")
+                # 강의 등록 실패해도 강사 등록은 성공한 것으로 처리
+        
+        # JWT 토큰 생성
+        try:
+            token = create_access_token(
+                data={"sub": instructor.id, "role": "instructor"}
+            )
+        except Exception as e:
+            logger.error(f"토큰 생성 실패: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="토큰 생성 중 오류가 발생했습니다.",
+            )
+        
+        logger.info(f"강사 회원가입 완료: ID={instructor.id}")
+        return TokenResponse(
+            access_token=token,
+            user_id=instructor.id,
+            role="instructor",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"예상치 못한 오류: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"서버 오류가 발생했습니다: {str(e)}",
+        )
+
+
+@router.post("/auth/login", response_model=TokenResponse)
+async def login(
+    payload: LoginRequest,
+    session: Session = Depends(get_session),
+) -> TokenResponse:
+    """로그인 - ID와 비밀번호로 인증"""
+    if payload.role == "instructor":
+        user = session.get(Instructor, payload.user_id)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - User not found",
+            )
+        
+        # 비밀번호 검증
+        if not hasattr(user, "password_hash") or not user.password_hash:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - Password not set",
+            )
+        
+        if not verify_password(payload.password, user.password_hash):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - Wrong password",
+            )
+    elif payload.role == "student":
+        from core.dh_models import Student
+        user = session.get(Student, payload.user_id)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials - User not found",
+            )
+        # 학생 비밀번호 검증은 향후 구현 예정
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid role. Must be 'instructor' or 'student'",
+        )
+    
+    token = create_access_token(
+        data={"sub": user.id, "role": payload.role}
+    )
+    
+    return TokenResponse(
+        access_token=token,
+        user_id=user.id,
+        role=payload.role,
     )
 
 
@@ -73,17 +471,34 @@ def list_courses(
     """
     from sqlmodel import or_
     
+    # 검색어가 있으면 강사 정보도 미리 가져오기
+    matching_instructor_ids = set()
+    if q:
+        q_lower = q.lower().strip()
+        # 강사명으로 검색 가능한 강사 ID 찾기
+        instructors = session.exec(select(Instructor)).all()
+        for instructor in instructors:
+            if instructor.name and q_lower in instructor.name.lower():
+                matching_instructor_ids.add(instructor.id)
+    
     query = select(Course)
     
-    # 검색어 필터 (SQLite는 ilike가 없으므로 contains 사용)
+    # 검색어 필터 (강의명 또는 강사 ID로 검색)
     if q:
-        # 강의명 또는 강의 ID로 검색
-        query = query.where(
-            or_(
-                Course.title.contains(q) if Course.title else False,
-                Course.id.contains(q),
-            )
-        )
+        q_lower = q.lower().strip()
+        conditions = []
+        
+        # 강의명으로 검색 (title이 None이 아닌 경우)
+        conditions.append(Course.title.contains(q))
+        # 강의 ID로 검색
+        conditions.append(Course.id.contains(q))
+        
+        # 강사명으로 검색 가능한 강사 ID 포함
+        if matching_instructor_ids:
+            conditions.append(Course.instructor_id.in_(list(matching_instructor_ids)))
+        
+        if conditions:
+            query = query.where(or_(*conditions))
     
     # 카테고리 필터
     if category:
@@ -98,9 +513,16 @@ def list_courses(
     result = []
     for course in courses:
         instructor = session.get(Instructor, course.instructor_id)
-        # 검색어가 강사명과 일치하는지 확인
-        if q and instructor and instructor.name:
-            if q.lower() not in instructor.name.lower():
+        
+        # 검색어 필터링: 강의명 또는 강사명 중 하나라도 일치하면 포함
+        if q:
+            q_lower = q.lower().strip()
+            course_title_match = course.title and q_lower in course.title.lower()
+            course_id_match = q_lower in course.id.lower()
+            instructor_name_match = instructor and instructor.name and q_lower in instructor.name.lower()
+            
+            # 하나도 일치하지 않으면 제외
+            if not (course_title_match or course_id_match or instructor_name_match):
                 continue
         
         # 챕터 개수 확인
@@ -116,6 +538,7 @@ def list_courses(
             "status": course.status.value,
             "instructor_id": course.instructor_id,
             "instructor_name": instructor.name if instructor else None,
+            "instructor_specialization": instructor.specialization if instructor else None,
             "created_at": course.created_at.isoformat() if course.created_at else None,
             "progress": getattr(course, "progress", 0),
             "has_chapters": has_chapters,
@@ -133,25 +556,60 @@ def get_course(
 ) -> dict:
     """
     단일 강의 정보 조회
+    DB에 없어도 파일 시스템에서 기본 정보 반환
     """
     course = session.get(Course, course_id)
-    if not course:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"강의를 찾을 수 없습니다: {course_id}")
     
-    # 강사 정보 가져오기
-    instructor = session.get(Instructor, course.instructor_id)
+    if course:
+        # 강사 정보 가져오기
+        instructor = session.get(Instructor, course.instructor_id)
+        
+        return {
+            "id": course.id,
+            "title": course.title or course.id,
+            "category": getattr(course, "category", None),
+            "instructor_id": course.instructor_id,
+            "instructor_name": instructor.name if instructor else None,
+            "status": course.status.value,
+            "progress": getattr(course, "progress", 0),
+            "created_at": course.created_at.isoformat() if course.created_at else None,
+        }
     
-    return {
-        "id": course.id,
-        "title": course.title or course.id,
-        "category": getattr(course, "category", None),
-        "instructor_id": course.instructor_id,
-        "instructor_name": instructor.name if instructor else None,
-        "status": course.status.value,
-        "progress": getattr(course, "progress", 0),
-        "created_at": course.created_at.isoformat() if course.created_at else None,
-    }
+    # DB에 없으면 파일 시스템에서 확인하여 기본 정보 반환
+    from core.config import AppSettings
+    settings = AppSettings()
+    
+    # 여러 가능한 instructor_id 경로 시도
+    possible_instructor_ids = [
+        "test-instructor-1",
+        "test-instructor",
+    ]
+    # course_id에서 추론 (test-course-1 -> test-instructor-1)
+    if "-" in course_id:
+        base_name = course_id.split("-")[0]
+        possible_instructor_ids.append(f"{base_name}-instructor-1")
+        possible_instructor_ids.append(f"{base_name}-instructor")
+    
+    for instructor_id in possible_instructor_ids:
+        if not instructor_id:
+            continue
+        course_dir = settings.uploads_dir / instructor_id / course_id
+        if course_dir.exists():
+            # 파일 시스템에 강의 디렉토리가 있으면 기본 정보 반환
+            return {
+                "id": course_id,
+                "title": course_id.replace("-", " ").title(),
+                "category": None,
+                "instructor_id": instructor_id,
+                "instructor_name": None,
+                "status": "completed",
+                "progress": 100,
+                "created_at": None,
+            }
+    
+    # 파일 시스템에도 없으면 404 반환
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail=f"강의를 찾을 수 없습니다: {course_id}")
 
 
 @router.get("/courses/{course_id}/chapters")
@@ -342,6 +800,7 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
     Get video/audio file for a course. Returns the first video or audio file found for the course.
     Supports both mp4 (video) and mp3 (audio) files.
     For testing: can also serve files from ref/video/ folder.
+    Also searches filesystem if course is not in DB.
     """
     import logging
     from core.config import AppSettings
@@ -352,7 +811,10 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
     
     # Try to get video/audio from database
     course = session.get(Course, course_id)
+    logger.info(f"Course found in DB: {course is not None}")
     if course:
+        logger.info(f"Instructor ID: {course.instructor_id}")
+        logger.info(f"Uploads directory: {settings.uploads_dir}")
         # 우선 video 타입 파일 확인 (mp4 우선)
         videos = session.exec(
             select(Video).where(
@@ -360,7 +822,9 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
                 Video.filetype == "video"
             )
         ).all()
+        logger.info(f"Found {len(videos)} video records in DB")
         for vid in videos:
+            logger.info(f"Checking video record: filename={vid.filename}, storage_path={vid.storage_path}, filetype={vid.filetype}")
             # storage_path가 절대 경로인지 상대 경로인지 확인
             video_path = Path(vid.storage_path)
             if not video_path.is_absolute():
@@ -371,6 +835,7 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
             else:
                 video_path = video_path.resolve()
             
+            logger.info(f"Resolved video path: {video_path} (exists: {video_path.exists()})")
             if video_path.exists():
                 suffix = video_path.suffix.lower()
                 logger.info(f"Found video file: {video_path} (suffix: {suffix})")
@@ -389,7 +854,9 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
                 Video.filetype == "audio"
             )
         ).all()
+        logger.info(f"Found {len(audios)} audio records in DB")
         for audio in audios:
+            logger.info(f"Checking audio record: filename={audio.filename}, storage_path={audio.storage_path}")
             # storage_path가 절대 경로인지 상대 경로인지 확인
             audio_path = Path(audio.storage_path)
             if not audio_path.is_absolute():
@@ -438,8 +905,12 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
         # instructor_id/course_id 구조로 찾기
         if course.instructor_id:
             course_dir = settings.uploads_dir / course.instructor_id / course_id
+            logger.info(f"Checking filesystem directory: {course_dir} (exists: {course_dir.exists()})")
             if course_dir.exists():
                 logger.info(f"Searching for files in: {course_dir}")
+                # 디렉토리 내 파일 목록 출력
+                all_files = list(course_dir.iterdir())
+                logger.info(f"Files in directory: {[f.name for f in all_files]}")
                 # mp4 파일 찾기
                 for video_file in course_dir.glob("*.mp4"):
                     if video_file.exists():
@@ -477,6 +948,63 @@ def get_video(course_id: str, session: Session = Depends(get_session)):
                                 }
                             )
     
+    # DB에 강의가 없어도 파일 시스템에서 직접 찾기 시도
+    # 여러 가능한 instructor_id 경로 시도
+    possible_instructor_ids = [
+        "test-instructor-1",
+        "test-instructor",
+    ]
+    # course_id에서 추론 (test-course-1 -> test-instructor-1)
+    if "-" in course_id:
+        base_name = course_id.split("-")[0]
+        possible_instructor_ids.append(f"{base_name}-instructor-1")
+        possible_instructor_ids.append(f"{base_name}-instructor")
+    
+    logger.info(f"Course not in DB, searching filesystem with possible instructor_ids: {possible_instructor_ids}")
+    
+    for instructor_id in possible_instructor_ids:
+        if not instructor_id:
+            continue
+        course_dir = settings.uploads_dir / instructor_id / course_id
+        if course_dir.exists():
+            logger.info(f"Searching for files in: {course_dir}")
+            # mp4 파일 찾기
+            for video_file in course_dir.glob("*.mp4"):
+                if video_file.exists():
+                    logger.info(f"Found video file via filesystem search: {video_file}")
+                    return _serve_video_file(video_file, "video/mp4")
+            # 다른 비디오 형식 찾기
+            for ext in [".avi", ".mov", ".mkv", ".webm"]:
+                for video_file in course_dir.glob(f"*{ext}"):
+                    if video_file.exists():
+                        logger.info(f"Found video file via filesystem search: {video_file}")
+                        return _serve_video_file(video_file, "video/mp4")
+            # mp3 파일 찾기
+            for audio_file in course_dir.glob("*.mp3"):
+                if audio_file.exists():
+                    logger.info(f"Found audio file via filesystem search: {audio_file}")
+                    return FileResponse(
+                        audio_file, 
+                        media_type="audio/mpeg",
+                        headers={
+                            "Accept-Ranges": "bytes",
+                            "Content-Length": str(audio_file.stat().st_size),
+                        }
+                    )
+            # 다른 오디오 형식 찾기
+            for ext in [".wav", ".m4a", ".aac", ".ogg", ".flac"]:
+                for audio_file in course_dir.glob(f"*{ext}"):
+                    if audio_file.exists():
+                        logger.info(f"Found audio file via filesystem search: {audio_file}")
+                        return FileResponse(
+                            audio_file, 
+                            media_type="audio/mpeg",
+                            headers={
+                                "Accept-Ranges": "bytes",
+                                "Content-Length": str(audio_file.stat().st_size),
+                            }
+                        )
+    
     # Fallback: try ref/video folder for testing
     ref_video = PROJECT_ROOT / "ref" / "video" / "testvedio_1.mp4"
     if ref_video.exists():
@@ -493,35 +1021,221 @@ def ask(
     pipeline: RAGPipeline = Depends(get_pipeline),
     session: Session = Depends(get_session),
 ) -> ChatResponse:
+    # course_id URL 디코딩 (프론트엔드에서 인코딩되어 전달될 수 있음)
+    from urllib.parse import unquote
+    course_id = unquote(payload.course_id) if payload.course_id else payload.course_id
+    # payload.course_id를 디코딩된 값으로 업데이트
+    payload.course_id = course_id
+    
     conversation_id = payload.conversation_id or "default"
     
     # 대화 히스토리 가져오기
     history = _conversation_history.get(conversation_id, [])
     
-    # 시간 관련 질문인지 확인 (예: "지금 몇분대야", "현재 시간", "몇 분대")
-    is_time_question = False
-    if payload.current_time is not None and payload.current_time > 0:
-        time_keywords = ["몇분", "몇 분", "시간", "분대", "현재", "지금"]
-        question_lower = payload.question.lower()
-        is_time_question = any(keyword in question_lower for keyword in time_keywords)
+    # 질문 분석: 인사말인지, 긍정적 피드백인지, 대화 히스토리 질문인지 확인
+    question_lower = payload.question.lower().strip()
+    question_trimmed = payload.question.strip()
+    
+    # 인사말 키워드 (간단한 인사만, 불필요한 설명 없이)
+    greeting_keywords = [
+        "안녕", "안녕하세요", "안녕하셔", "안녕하십니까",
+        "쌤 안녕", "쌤안녕", "선생님 안녕", "선생님안녕",
+        "하이", "hi", "hello"
+    ]
+    is_greeting = any(kw in question_lower for kw in greeting_keywords) and len(question_trimmed) < 20
+    
+    # 인사말이면 페르소나 적용된 답변 생성
+    if is_greeting:
+        answer = _generate_persona_response(
+            user_message=f"학생이 '{payload.question}'라고 인사했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+            course_id=payload.course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=history
+        )
         
-        if is_time_question:
-            # 시간 관련 질문이면 직접 답변
-            minutes = int(payload.current_time // 60)
-            seconds = int(payload.current_time % 60)
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 50:
+            history = history[-50:]
+        _conversation_history[conversation_id] = history
+        
+        return ChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+        )
+    
+    # 긍정적 피드백 키워드 (간단하게 답변, API 호출 없이 템플릿 응답)
+    positive_feedback_keywords = [
+        "이해가 가", "이해가 되", "알았", "알겠", "이해했", "이해됐", 
+        "이해했어", "알겠어", "이해됐어", "이해가 돼", "이해가 되네",
+        "좋아", "좋아요", "감사", "고마워", "고마워요", "네", "응", "예",
+        "이제 알았", "이제 알겠", "이제 이해했", "이제 이해했어", "이제 이해됐",
+        "아하 이해", "아하 알았", "아하 알겠", "이해됐어요", "이해가 됐어요",
+        "이해가 됐", "알겠어요", "알았어요", "이해했어요"
+    ]
+    is_positive_feedback = any(kw in question_lower for kw in positive_feedback_keywords)
+    
+    # 긍정적 피드백이면 페르소나 적용된 답변 생성
+    if is_positive_feedback:
+        # 대화 히스토리에 최근 assistant 답변이 있으면 그것을 참고
+        context = None
+        if history and len(history) > 0:
+            recent_assistant = next(
+                (msg.get("content", "") for msg in reversed(history[-5:]) if msg.get("role") == "assistant"),
+                None
+            )
+            if recent_assistant:
+                context = f"최근에 제가 설명한 내용: {recent_assistant[:200]}"
+        
+        answer = _generate_persona_response(
+            user_message=f"학생이 '{payload.question}'라고 긍정적인 피드백을 주었습니다. 강사로서 기쁘게 반응하고, 더 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+            course_id=payload.course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=history,
+            context=context
+        )
+        
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 50:
+            history = history[-50:]
+        _conversation_history[conversation_id] = history
+        
+        return ChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+        )
+    
+    # 대화 히스토리 관련 질문
+    history_question_keywords = [
+        "방금 한 말", "방금 말한", "방금 말씀", "방금 한 말씀",
+        "아까 말한", "아까 한 말", "아까 말씀", "아까 한 말씀",
+        "지금까지", "지금까지 한 말", "지금까지 말한", "지금까지 대화",
+        "무슨 말", "뭐라고", "뭐라고 했", "뭐라고 하셨", "뭐라고 말씀"
+    ]
+    is_history_question = any(kw in question_lower for kw in history_question_keywords)
+    
+    # 과거 질문 반복 확인 (API 호출 없이 이전 답변 재사용)
+    is_repeated_question = False
+    previous_answer = None
+    if history:
+        # 최근 사용자 질문들과 비교
+        recent_user_questions = []
+        recent_answers = []
+        for i, msg in enumerate(history[-20:]):  # 최근 20개 메시지 확인
+            if msg.get("role") == "user":
+                recent_user_questions.append({
+                    "content": msg.get("content", "").lower(),
+                    "index": i
+                })
+            elif msg.get("role") == "assistant" and recent_user_questions:
+                # 이전 사용자 질문에 대한 답변
+                recent_answers.append({
+                    "question_index": recent_user_questions[-1]["index"],
+                    "answer": msg.get("content", "")
+                })
+        
+        current_question_lower = question_lower
+        # 유사도 체크 (간단한 포함 관계로)
+        for past_q_info in recent_user_questions:
+            past_q = past_q_info["content"]
+            if past_q and len(past_q) > 5:  # 너무 짧은 질문은 제외
+                # 핵심 키워드 추출하여 비교
+                past_keywords = set([w for w in past_q.split() if len(w) > 2])
+                current_keywords = set([w for w in current_question_lower.split() if len(w) > 2])
+                if past_keywords and current_keywords:
+                    similarity = len(past_keywords & current_keywords) / len(past_keywords | current_keywords)
+                    if similarity > 0.5:  # 50% 이상 유사하면 반복 질문으로 간주
+                        is_repeated_question = True
+                        # 해당 질문에 대한 이전 답변 찾기
+                        for answer_info in recent_answers:
+                            if answer_info["question_index"] == past_q_info["index"]:
+                                previous_answer = answer_info["answer"]
+                                break
+                        break
+        
+        # 반복 질문이고 이전 답변이 있으면 페르소나 적용된 답변 생성
+        if is_repeated_question and previous_answer:
+            answer = _generate_persona_response(
+                user_message=f"학생이 이전에 물어본 내용과 비슷한 질문을 다시 했습니다: '{payload.question}'. 이전에 제가 설명한 내용은 다음과 같습니다: {previous_answer[:300]}. 강사로서 자연스럽게 이전 답변을 참고하여 다시 설명해주되, 더 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history
+            )
+            
+            # 대화 히스토리 업데이트
+            history.append({"role": "user", "content": payload.question})
+            history.append({"role": "assistant", "content": answer})
+            if len(history) > 50:
+                history = history[-50:]
+            _conversation_history[conversation_id] = history
+            
             return ChatResponse(
-                answer=f"현재 {minutes}분 {seconds}초 부분을 시청 중이시군요! 😊\n\n해당 시간대의 강의 내용에 대해 궁금한 점이 있으시면 언제든지 물어보세요.",
+                answer=answer,
                 sources=[],
                 conversation_id=conversation_id,
                 course_id=payload.course_id,
             )
     
-    # "방금", "지금", "현재" 같은 키워드가 있으면 해당 시간대 transcript 우선 사용
+    # 시간 관련 질문인지 확인 (예: "지금 몇분대야", "현재 시간", "몇 분대")
+    # 단순히 현재 시간만 물어보는 질문인지 확인 (이해 관련 질문 제외)
+    is_time_question = False
+    if payload.current_time is not None and payload.current_time > 0:
+        time_keywords = ["몇분", "몇 분", "시간", "분대"]
+        question_lower = payload.question.lower()
+        # "이해", "설명", "다시" 같은 키워드가 없고, 시간 관련 키워드만 있는 경우
+        has_understanding_keyword = any(kw in question_lower for kw in ["이해", "모르겠", "다시", "설명", "어려워", "어렵", "무엇", "뭐", "말씀", "말하는"])
+        has_time_keyword = any(keyword in question_lower for keyword in time_keywords)
+        # 시간 관련 키워드는 있지만 이해 관련 키워드는 없는 경우에만 시간만 알려주기
+        is_time_question = has_time_keyword and not has_understanding_keyword
+        
+        if is_time_question:
+            # 시간 관련 질문이면 페르소나 적용된 답변 생성
+            minutes = int(payload.current_time // 60)
+            seconds = int(payload.current_time % 60)
+            answer = _generate_persona_response(
+                user_message=f"학생이 현재 시청 중인 시간({minutes}분 {seconds}초)에 대해 물어봤습니다: '{payload.question}'. 강사로서 현재 시간을 알려주고, 해당 시간대의 강의 내용에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history,
+                context=f"현재 비디오 재생 시간: {minutes}분 {seconds}초"
+            )
+            return ChatResponse(
+                answer=answer,
+                sources=[],
+                conversation_id=conversation_id,
+                course_id=payload.course_id,
+            )
+    
+    # "이해가 안가요", "지금 말하는 부분", "방금 말씀" 같은 질문이면 해당 시간대 transcript 우선 사용
     use_transcript_first = False
     if payload.current_time is not None and payload.current_time > 0:
-        recent_keywords = ["방금", "지금", "현재", "이 부분", "여기", "지금 이", "방금 전"]
         question_lower = payload.question.lower()
-        use_transcript_first = any(keyword in question_lower for keyword in recent_keywords)
+        
+        # 시간/맥락 관련 키워드
+        recent_keywords = [
+            "방금", "지금", "현재", "이 부분", "여기", "지금 이", "방금 전",
+            "쌤", "선생님", "설명", "말씀", "이야기", "내용", "부분", "말하", "말씀하"
+        ]
+        # 이해 관련 키워드
+        understanding_keywords = ["이해", "모르겠", "다시", "설명", "어려워", "어렵", "무엇", "뭐", "뭔지"]
+        
+        has_recent_keyword = any(keyword in question_lower for keyword in recent_keywords)
+        has_understanding_keyword = any(kw in question_lower for kw in understanding_keywords)
+        
+        # 시간/맥락 키워드가 있거나, 이해 관련 키워드와 함께 현재 시간 정보가 있는 경우
+        # 특히 "지금 말하는 부분이 이해가 안가요" 같은 질문 감지
+        use_transcript_first = has_recent_keyword or (has_understanding_keyword and payload.current_time > 0)
     
     try:
         # 시간대 기반 질문이면 transcript를 먼저 사용
@@ -532,11 +1246,25 @@ def ask(
             docs = []
             metas = []
         else:
-            # RAG 쿼리 실행
+            # 강사 정보 가져오기
+            instructor_info = None
+            course = session.get(Course, payload.course_id)
+            if course:
+                instructor = session.get(Instructor, course.instructor_id)
+                if instructor:
+                    instructor_info = {
+                        "name": instructor.name,
+                        "bio": instructor.bio,
+                        "specialization": instructor.specialization,
+                    }
+            
+            # RAG 쿼리 실행 (current_time 전달)
             result = pipeline.query(
                 payload.question, 
                 course_id=payload.course_id,
-                conversation_history=history
+                conversation_history=history,
+                current_time=payload.current_time,
+                instructor_info=instructor_info
             )
             
             answer = result.get("answer", "")
@@ -567,135 +1295,480 @@ def ask(
                 use_transcript = True
         
         if use_transcript:
-            transcript_data = _load_transcript_for_course(payload.course_id, session, return_segments=True)
-            transcript_text = transcript_data.get("text", "") if isinstance(transcript_data, dict) else transcript_data or ""
-            segments = transcript_data.get("segments", []) if isinstance(transcript_data, dict) else []
-            
-            if transcript_text:
-                # 현재 시청 시간대의 transcript segment 찾기
-                context_text = transcript_text
-                if payload.current_time is not None and payload.current_time > 0 and segments:
-                    # 현재 시간 ±30초 범위의 segment 찾기
-                    time_window = 30  # ±30초
-                    relevant_segments = []
-                    for seg in segments:
-                        start = seg.get("start", 0)
-                        end = seg.get("end", 0)
-                        # 현재 시간이 segment 범위 내에 있거나 ±30초 이내인 경우
-                        if (start <= payload.current_time <= end) or \
-                           (abs(start - payload.current_time) <= time_window) or \
-                           (abs(end - payload.current_time) <= time_window):
-                            relevant_segments.append(seg)
-                    
-                    # 관련 segment가 있으면 해당 부분을 우선 사용
-                    if relevant_segments:
-                        context_parts = []
-                        for seg in relevant_segments[:5]:  # 최대 5개 segment
-                            context_parts.append(seg.get("text", ""))
-                        if context_parts:
-                            context_text = " ".join(context_parts)
-                            print(f"[CHAT DEBUG] 📍 Using transcript segments around {payload.current_time}s: {len(relevant_segments)} segments")
-                        else:
-                            # segment가 있지만 텍스트가 없으면 전체 transcript 사용
-                            context_text = transcript_text[:8000]
+            print(f"[CHAT DEBUG] 🔍 Loading transcript for course_id={payload.course_id}, current_time={payload.current_time}")
+            context_text = None  # 초기화
+            try:
+                transcript_data = _load_transcript_for_course(payload.course_id, session, return_segments=True)
+                print(f"[CHAT DEBUG] 📄 Transcript data type: {type(transcript_data)}")
+                
+                if transcript_data is None:
+                    print(f"[CHAT DEBUG] ❌ Transcript file not found for course_id={payload.course_id}")
+                    # transcript가 없으면 기본 답변 제공
+                    if use_transcript_first:
+                        minutes = int(payload.current_time // 60) if payload.current_time else 0
+                        seconds = int(payload.current_time % 60) if payload.current_time else 0
+                        answer = _generate_persona_response(
+                            user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 자막 파일을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명하고, 강의가 아직 처리 중이거나 자막 파일이 준비되지 않았을 수 있다고 말해주세요.",
+                            course_id=payload.course_id,
+                            session=session,
+                            pipeline=pipeline,
+                            conversation_history=history,
+                            context=f"자막 파일 없음: {minutes}분 {seconds}초"
+                        )
                     else:
-                        # 관련 segment가 없으면 전체 transcript 사용
-                        context_text = transcript_text[:8000]
+                        answer = _generate_persona_response(
+                            user_message="학생이 질문했지만 강의 자막 파일을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명하고, 강의가 아직 처리 중일 수 있다고 말해주세요.",
+                            course_id=payload.course_id,
+                            session=session,
+                            pipeline=pipeline,
+                            conversation_history=history,
+                            context="자막 파일 없음"
+                        )
                 else:
-                    # current_time이 없으면 전체 transcript 사용
-                    context_text = transcript_text[:8000]
-                
-                # 저장된 transcript를 컨텍스트로 사용하여 다시 질의
-                from openai import OpenAI
-                from ai.config import AISettings
-                settings = AISettings()
-                
-                if settings.openai_api_key:
-                    # 페르소나 프롬프트 가져오기
-                    persona_prompt = ""
-                    try:
-                        from ai.services.vectorstore import get_chroma_client, get_collection
-                        client = get_chroma_client(settings)
-                        collection = get_collection(client, settings)
-                        persona_results = collection.get(
-                            ids=[f"{payload.course_id}-persona"],
-                            include=["documents"],
-                        )
-                        if persona_results.get("documents") and len(persona_results["documents"]) > 0:
-                            persona_prompt = persona_results["documents"][0]
-                    except Exception:
-                        pass
+                    transcript_text = transcript_data.get("text", "") if isinstance(transcript_data, dict) else transcript_data or ""
+                    segments = transcript_data.get("segments", []) if isinstance(transcript_data, dict) else []
+                    print(f"[CHAT DEBUG] 📝 Transcript text length: {len(transcript_text)}, segments: {len(segments)}")
                     
-                    # 현재 시청 시간 정보 추가
-                    time_context = ""
-                    current_time_info = ""
-                    if payload.current_time is not None and payload.current_time > 0:
-                        minutes = int(payload.current_time // 60)
-                        seconds = int(payload.current_time % 60)
-                        time_context = f"\n\n[참고: 학생이 현재 강의의 {minutes}분 {seconds}초 부분을 시청 중입니다.]\n"
-                        current_time_info = f"현재 시청 시간: {minutes}분 {seconds}초"
-                    
-                    # transcript 기반 프롬프트 생성
-                    system_message = (
-                        "당신은 강의 내용을 바탕으로 학생의 질문에 답변하는 AI 챗봇입니다.\n\n"
-                    )
-                    if current_time_info:
-                        system_message += (
-                            f"**중요**: 학생이 현재 시청 중인 시간대 정보를 알고 있습니다. "
-                            f"학생이 '지금 몇분대야', '현재 시간', '몇 분대' 같은 질문을 하면 "
-                            f"현재 시청 중인 시간대를 친절하게 알려주세요.\n\n"
-                        )
-                    
-                    chat_prompt = (
-                        f"{persona_prompt}\n\n" if persona_prompt else ""
-                    ) + (
-                        f"{system_message}"
-                        f"강의 전사 내용:\n{context_text}\n{time_context}\n"
-                        f"학생 질문: {payload.question}\n\n"
-                        "위 강의 내용을 바탕으로 질문에 답변하세요. "
-                        "강의 내용에서 직접 답을 찾을 수 있으면 그대로 사용하고, "
-                        "없으면 일반적인 지식으로 보완하되 강의 범위와 관련이 있음을 명시하세요."
-                    )
-                    
-                    # 대화 히스토리 포함
-                    messages = []
-                    system_content = ""
-                    if persona_prompt:
-                        system_content = persona_prompt
+                    if not transcript_text or not transcript_text.strip():
+                        print(f"[CHAT DEBUG] ⚠️ Transcript text is empty")
+                        if use_transcript_first:
+                            minutes = int(payload.current_time // 60) if payload.current_time else 0
+                            seconds = int(payload.current_time % 60) if payload.current_time else 0
+                            answer = _generate_persona_response(
+                                user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 자막 내용이 비어있습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                course_id=payload.course_id,
+                                session=session,
+                                pipeline=pipeline,
+                                conversation_history=history,
+                                context=f"자막 내용 비어있음: {minutes}분 {seconds}초"
+                            )
+                        else:
+                            answer = _generate_persona_response(
+                                user_message="학생이 질문했지만 강의 자막 내용이 비어있습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                course_id=payload.course_id,
+                                session=session,
+                                pipeline=pipeline,
+                                conversation_history=history,
+                                context="자막 내용 비어있음"
+                            )
                     else:
-                        system_content = "당신은 강의 내용을 바탕으로 학생의 질문에 답변하는 AI 챗봇입니다."
-                    
-                    # 현재 시청 시간 정보를 system message에 추가
-                    if payload.current_time is not None and payload.current_time > 0:
-                        minutes = int(payload.current_time // 60)
-                        seconds = int(payload.current_time % 60)
-                        system_content += f"\n\n**중요**: 학생이 현재 강의의 {minutes}분 {seconds}초 부분을 시청 중입니다. 학생이 '지금 몇분대야', '현재 시간', '몇 분대' 같은 질문을 하면 현재 시청 중인 시간대를 친절하게 알려주세요."
-                    
-                    messages.append({"role": "system", "content": system_content})
-                    
-                    # 대화 히스토리 추가
-                    if history:
-                        recent_history = history[-5:]  # 최근 5개만
-                        for msg in recent_history:
-                            role = msg.get("role", "user")
-                            content = msg.get("content", "")
-                            if role in ["user", "assistant"] and content:
-                                messages.append({"role": role, "content": content})
-                    
-                    messages.append({"role": "user", "content": chat_prompt})
-                    
-                    try:
-                        client = OpenAI(api_key=settings.openai_api_key)
-                        resp = client.chat.completions.create(
-                            model=settings.llm_model,
-                            messages=messages,
-                            temperature=0.3,
-                        )
-                        answer = resp.choices[0].message.content
-                        print(f"[CHAT DEBUG] ✅ Used transcript file for course_id={payload.course_id}")
-                    except Exception as e:
-                        print(f"[CHAT DEBUG] ⚠️ Failed to use transcript: {e}")
-                        # 기존 answer 유지
+                        # transcript_text가 있는 경우 기존 로직 실행
+                        # 현재 시청 시간대의 transcript segment 찾기
+                        context_text = transcript_text
+                        if payload.current_time is not None and payload.current_time > 0 and segments:
+                            # 현재 시간 ±60초 범위의 segment 찾기 (범위 확대)
+                            time_window = 60  # ±60초
+                            relevant_segments = []
+                            for seg in segments:
+                                start = float(seg.get("start", 0))
+                                end = float(seg.get("end", 0))
+                                current_time = float(payload.current_time)
+                                
+                                # 현재 시간이 segment 범위 내에 있거나 ±60초 이내인 경우
+                                if (start <= current_time <= end) or \
+                                   (abs(start - current_time) <= time_window) or \
+                                   (abs(end - current_time) <= time_window):
+                                    # 거리 계산 (가까운 순으로 정렬하기 위해)
+                                    distance = min(abs(start - current_time), abs(end - current_time), abs((start + end) / 2 - current_time))
+                                    relevant_segments.append((distance, seg))
+                            
+                            # 거리순으로 정렬 (가까운 것부터)
+                            relevant_segments.sort(key=lambda x: x[0])
+                            relevant_segments = [seg for _, seg in relevant_segments]
+                            
+                            # 관련 segment가 있으면 해당 부분을 우선 사용
+                            if relevant_segments:
+                                context_parts = []
+                                # 최대 10개 segment 사용 (더 많은 컨텍스트 제공)
+                                for seg in relevant_segments[:10]:
+                                    seg_text = seg.get("text", "").strip()
+                                    if seg_text:
+                                        context_parts.append(seg_text)
+                                
+                                if context_parts:
+                                    context_text = " ".join(context_parts)
+                                    print(f"[CHAT DEBUG] 📍 Using transcript segments around {payload.current_time}s: {len(relevant_segments)} segments, {len(context_text)} chars")
+                                else:
+                                    # segment가 있지만 텍스트가 없으면 전체 transcript 사용
+                                    context_text = transcript_text[:8000]
+                                    print(f"[CHAT DEBUG] ⚠️ Segments found but no text, using full transcript")
+                            else:
+                                # 관련 segment가 없으면 전체 transcript 사용
+                                context_text = transcript_text[:8000]
+                                print(f"[CHAT DEBUG] ⚠️ No segments found around {payload.current_time}s, using full transcript")
+                        else:
+                            # current_time이 없으면 전체 transcript 사용
+                            context_text = transcript_text[:8000]
+                        
+                        # context_text가 비어있으면 에러
+                        if not context_text or not context_text.strip():
+                            print(f"[CHAT DEBUG] ⚠️ Context text is empty after processing")
+                            if use_transcript_first:
+                                minutes = int(payload.current_time // 60) if payload.current_time else 0
+                                seconds = int(payload.current_time % 60) if payload.current_time else 0
+                                answer = _generate_persona_response(
+                                    user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 내용을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                    course_id=payload.course_id,
+                                    session=session,
+                                    pipeline=pipeline,
+                                    conversation_history=history,
+                                    context=f"강의 내용 없음: {minutes}분 {seconds}초"
+                                )
+                            else:
+                                answer = _generate_persona_response(
+                                    user_message="학생이 질문했지만 해당 시간대의 강의 내용을 찾을 수 없습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                    course_id=payload.course_id,
+                                    session=session,
+                                    pipeline=pipeline,
+                                    conversation_history=history,
+                                    context="강의 내용 없음"
+                                )
+                        else:
+                            # 저장된 transcript를 컨텍스트로 사용하여 다시 질의
+                            from openai import OpenAI
+                            from ai.config import AISettings
+                            settings = AISettings()
+                            
+                            if settings.openai_api_key:
+                                # 페르소나 프롬프트 가져오기
+                                persona_prompt = ""
+                                try:
+                                    from ai.services.vectorstore import get_chroma_client, get_collection
+                                    client = get_chroma_client(settings)
+                                    collection = get_collection(client, settings)
+                                    persona_results = collection.get(
+                                        ids=[f"{payload.course_id}-persona"],
+                                        include=["documents"],
+                                    )
+                                    if persona_results.get("documents") and len(persona_results["documents"]) > 0:
+                                        persona_prompt = persona_results["documents"][0]
+                                except Exception:
+                                    pass
+                                
+                                # 현재 시청 시간 정보 추가
+                                time_context = ""
+                                current_time_info = ""
+                                if payload.current_time is not None and payload.current_time > 0:
+                                    minutes = int(payload.current_time // 60)
+                                    seconds = int(payload.current_time % 60)
+                                    time_context = f"\n\n[참고: 학생이 현재 강의의 {minutes}분 {seconds}초 부분을 시청 중입니다.]\n"
+                                    current_time_info = f"현재 시청 시간: {minutes}분 {seconds}초"
+                                
+                                # transcript 기반 프롬프트 생성
+                                system_message = (
+                                    "당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                    "'여러분'이나 '학생' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                    "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
+                                )
+                                if current_time_info:
+                                    system_message += (
+                                        f"**중요**: 학생이 현재 시청 중인 시간대 정보를 알고 있습니다. "
+                                        f"학생이 '지금 몇분대야', '현재 시간', '몇 분대' 같은 질문을 하면 "
+                                        f"현재 시청 중인 시간대를 친절하게 알려주세요.\n\n"
+                                    )
+                                
+                                # 질문 유형에 따라 프롬프트 조정
+                                is_time_based_question = use_transcript_first
+                                
+                                # 대화 히스토리 질문 처리 (API 호출 없이 히스토리에서 직접 답변 생성)
+                                if is_history_question:
+                                    # 히스토리에서 직접 요약 생성 (API 호출 없음)
+                                    if history:
+                                        # 최근 대화 요약
+                                        recent_conversations = []
+                                        for i, msg in enumerate(history[-10:]):
+                                            role = msg.get("role", "")
+                                            content = msg.get("content", "")
+                                            if role == "user":
+                                                recent_conversations.append(f"학생: {content}")
+                                            elif role == "assistant":
+                                                recent_conversations.append(f"챗봇: {content}")
+                                        
+                                        if recent_conversations:
+                                            answer = "지금까지 우리가 나눈 대화 내용은 다음과 같습니다:\n\n" + "\n\n".join(recent_conversations[-6:]) + "\n\n궁금한 점이 더 있으면 언제든지 물어보세요!"
+                                        else:
+                                            answer = "아직 대화 내용이 없습니다. 궁금한 점이 있으면 언제든지 물어보세요!"
+                                    else:
+                                        answer = "아직 대화 내용이 없습니다. 궁금한 점이 있으면 언제든지 물어보세요!"
+                                    
+                                    # 대화 히스토리 업데이트
+                                    history.append({"role": "user", "content": payload.question})
+                                    history.append({"role": "assistant", "content": answer})
+                                    if len(history) > 50:
+                                        history = history[-50:]
+                                    _conversation_history[conversation_id] = history
+                                    
+                                    return ChatResponse(
+                                        answer=answer,
+                                        sources=[],
+                                        conversation_id=conversation_id,
+                                        course_id=payload.course_id,
+                                    )
+                                elif is_time_based_question:
+                                    # 학생의 질문이 이해 관련인지 확인
+                                    is_understanding_question = any(kw in question_lower for kw in [
+                                        "이해", "모르겠", "어려워", "어렵", "설명", "다시", "무엇", "뭐"
+                                    ])
+                                    
+                                    if is_understanding_question:
+                                        instruction = (
+                                            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                            "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
+                                            "학생이 현재 시청 중인 시간대의 강의 내용을 이해하지 못해서 질문하고 있습니다. "
+                                            "위에 제공된 강의 전사 내용은 학생이 현재 시청 중인 시간대(또는 그 근처)의 내용입니다. "
+                                            "**반드시 해당 시간대에서 설명된 내용을 바탕으로 답변해야 합니다.** "
+                                            "단순히 현재 시간만 알려주지 말고, 해당 시간대에서 실제로 설명한 내용을 더 쉽고 명확하게 설명해주세요. "
+                                            "예를 들어, 학생이 '지금 말하는 부분이 이해가 안가요'라고 하면, "
+                                            "해당 시간대에서 설명한 개념이나 내용을 더 쉽게 풀어서 설명하거나 예시를 들어 설명해주세요. "
+                                            "답변은 친절하고 학생의 이해를 돕는 방식으로 작성하되, 답변이 너무 길어지면 적절히 나누어 설명하세요."
+                                        )
+                                    else:
+                                        instruction = (
+                                            "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                            "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                            "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
+                                            "학생이 현재 시청 중인 시간대의 강의 내용에 대해 질문하고 있습니다. "
+                                            "위에 제공된 강의 전사 내용은 학생이 현재 시청 중인 시간대(또는 그 근처)의 내용입니다. "
+                                            "이 내용을 바탕으로 학생의 질문에 정확하고 친절하게 답변해주세요. "
+                                            "답변은 명확하고 간결하게 작성하되, 답변이 너무 길어지면 적절히 나누어 설명하세요."
+                                        )
+                                    max_tokens_for_response = 1500
+                                else:
+                                    instruction = (
+                                        "**중요**: 당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                        "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                        "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요.\n\n"
+                                        "위 강의 내용을 바탕으로 질문에 답변하세요. "
+                                        "강의 내용에서 직접 답을 찾을 수 있으면 그대로 사용하고, "
+                                        "없으면 일반적인 지식으로 보완하되 강의 범위와 관련이 있음을 명시하세요. "
+                                        "답변이 너무 길어지면 적절히 나누어 설명하세요."
+                                    )
+                                    max_tokens_for_response = 1500
+                                
+                                chat_prompt = (
+                                    f"{persona_prompt}\n\n" if persona_prompt else ""
+                                ) + (
+                                    f"{system_message}"
+                                    f"강의 전사 내용 (현재 시청 시간대):\n{context_text}\n{time_context}\n"
+                                    f"학생 질문: {payload.question}\n\n"
+                                    f"{instruction}"
+                                )
+                                
+                                # 대화 히스토리 포함
+                                messages = []
+                                system_content = ""
+                                if persona_prompt:
+                                    system_content = persona_prompt
+                                else:
+                                    system_content = (
+                                        "당신은 이 강의를 가르치는 강사입니다. 학생의 질문에 답변할 때, 강사로서 자연스럽게 대화하세요. "
+                                        "'여러분'이나 '학생', '챗봇' 같은 표현을 사용하지 말고, 직접적으로 '저는', '제가' 같은 표현을 사용하여 "
+                                        "강의를 가르치는 선생님으로서 학생에게 설명하는 톤으로 답변하세요."
+                                    )
+                                
+                                # 현재 시청 시간 정보를 system message에 추가
+                                if payload.current_time is not None and payload.current_time > 0:
+                                    minutes = int(payload.current_time // 60)
+                                    seconds = int(payload.current_time % 60)
+                                    system_content += f"\n\n**중요**: 학생이 현재 강의의 {minutes}분 {seconds}초 부분을 시청 중입니다. 학생이 '지금 몇분대야', '현재 시간', '몇 분대' 같은 질문을 하면 현재 시청 중인 시간대를 친절하게 알려주세요."
+                                
+                                messages.append({"role": "system", "content": system_content})
+                                
+                                # 대화 히스토리 추가 (대화 히스토리 질문이면 더 많이 포함)
+                                if history:
+                                    if is_history_question:
+                                        # 대화 히스토리 질문이면 최근 20개 포함
+                                        recent_history = history[-20:]
+                                    else:
+                                        recent_history = history[-10:]  # 일반적으로 최근 10개
+                                    
+                                    for msg in recent_history:
+                                        role = msg.get("role", "user")
+                                        content = msg.get("content", "")
+                                        if role in ["user", "assistant"] and content:
+                                            messages.append({"role": role, "content": content})
+                                
+                                # 대화 히스토리 질문이면 히스토리 정보를 프롬프트에 명시
+                                if is_history_question:
+                                    chat_prompt = (
+                                        f"학생이 '{payload.question}'라고 질문했습니다. "
+                                        f"위 대화 히스토리를 참고하여 학생과 챗봇이 지금까지 어떤 대화를 나눴는지 요약해서 알려주세요. "
+                                        f"간결하고 명확하게 답변하세요."
+                                    )
+                                else:
+                                    messages.append({"role": "user", "content": chat_prompt})
+                                
+                                try:
+                                    client = OpenAI(api_key=settings.openai_api_key)
+                                    resp = client.chat.completions.create(
+                                        model=settings.llm_model,
+                                        messages=messages,
+                                        temperature=0.3,
+                                        max_tokens=max_tokens_for_response if 'max_tokens_for_response' in locals() else 1500,
+                                    )
+                                    answer = resp.choices[0].message.content
+                                    
+                                    # 답변이 너무 길 경우 강력하게 나누기 (항상 빈 줄로 구분)
+                                    if answer and len(answer) > 250:  # 250자 이상이면 나누기 (더 적극적으로)
+                                        # 먼저 빈 줄로 구분된 문단으로 나누기
+                                        paragraphs = answer.split('\n\n')
+                                        
+                                        if len(paragraphs) > 1:
+                                            # 문단이 여러 개면 각 문단을 검사하여 적절히 나누기
+                                            divided_parts = []
+                                            for para in paragraphs:
+                                                para = para.strip()
+                                                if not para:
+                                                    continue
+                                                
+                                                # 문단이 250자 이상이면 문장 단위로 더 나누기
+                                                if len(para) > 250:
+                                                    # 마침표, 느낌표, 물음표로 문장 나누기
+                                                    sentences = []
+                                                    current_sentence = ""
+                                                    for char in para:
+                                                        current_sentence += char
+                                                        if char in ['。', '.', '!', '?'] and len(current_sentence.strip()) > 10:
+                                                            # 문장이 최소 10자 이상일 때만 나누기
+                                                            sentences.append(current_sentence.strip())
+                                                            current_sentence = ""
+                                                    if current_sentence.strip():
+                                                        sentences.append(current_sentence.strip())
+                                                    
+                                                    # 문장들을 적절히 묶어서 250자 이하로 만들기
+                                                    current_chunk = ""
+                                                    for sent in sentences:
+                                                        if len(current_chunk) + len(sent) + 1 < 250:
+                                                            current_chunk += (sent + " " if current_chunk else sent)
+                                                        else:
+                                                            if current_chunk:
+                                                                divided_parts.append(current_chunk.strip())
+                                                            current_chunk = sent + " "
+                                                    if current_chunk:
+                                                        divided_parts.append(current_chunk.strip())
+                                                else:
+                                                    divided_parts.append(para)
+                                            
+                                            if len(divided_parts) > 1:
+                                                answer = '\n\n'.join(divided_parts)
+                                        else:
+                                            # 문단이 하나면 문장 단위로 나누기 (더 적극적으로)
+                                            # 마침표, 느낌표, 물음표로 문장 나누기
+                                            sentences = []
+                                            current_sentence = ""
+                                            for char in answer:
+                                                current_sentence += char
+                                                if char in ['。', '.', '!', '?'] and len(current_sentence.strip()) > 10:
+                                                    sentences.append(current_sentence.strip())
+                                                    current_sentence = ""
+                                            if current_sentence.strip():
+                                                sentences.append(current_sentence.strip())
+                                            
+                                            # 문장들을 적절히 묶어서 250자 이하로 만들기
+                                            divided_parts = []
+                                            current_chunk = ""
+                                            for sent in sentences:
+                                                if len(current_chunk) + len(sent) + 1 < 250:
+                                                    current_chunk += (sent + " " if current_chunk else sent)
+                                                else:
+                                                    if current_chunk:
+                                                        divided_parts.append(current_chunk.strip())
+                                                    current_chunk = sent + " "
+                                            if current_chunk:
+                                                divided_parts.append(current_chunk.strip())
+                                            
+                                            if len(divided_parts) > 1:
+                                                answer = '\n\n'.join(divided_parts)
+                                    if not answer or not answer.strip():
+                                        raise ValueError("Empty response from OpenAI")
+                                    print(f"[CHAT DEBUG] ✅ Used transcript file for course_id={payload.course_id}, answer length: {len(answer)}")
+                                except Exception as e:
+                                    import traceback
+                                    error_msg = str(e)
+                                    print(f"[CHAT DEBUG] ❌ Failed to use transcript: {error_msg}")
+                                    print(f"[CHAT DEBUG] Traceback: {traceback.format_exc()}")
+                                    # 에러 발생 시 기본 답변 제공
+                                    if use_transcript_first:
+                                        # 시간 기반 질문인데 실패한 경우
+                                        minutes = int(payload.current_time // 60) if payload.current_time else 0
+                                        seconds = int(payload.current_time % 60) if payload.current_time else 0
+                                        answer = _generate_persona_response(
+                                            user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 내용을 불러오는 중 문제가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 질문해주시거나 다른 질문을 해달라고 말해주세요.",
+                                            course_id=payload.course_id,
+                                            session=session,
+                                            pipeline=pipeline,
+                                            conversation_history=history,
+                                            context=f"문제 발생: {minutes}분 {seconds}초"
+                                        )
+                                    else:
+                                        # 일반 질문인데 실패한 경우
+                                        answer = _generate_persona_response(
+                                            user_message="학생이 질문했지만 답변을 생성하는 중 문제가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                                            course_id=payload.course_id,
+                                            session=session,
+                                            pipeline=pipeline,
+                                            conversation_history=history,
+                                            context="답변 생성 문제"
+                                        )
+                            else:
+                                # OPENAI_API_KEY가 없는 경우 (페르소나 적용)
+                                answer = _generate_persona_response(
+                                    user_message="학생이 질문했지만 OpenAI API 키가 설정되지 않아 답변을 생성할 수 없습니다. 강사로서 정중하게 상황을 설명해주세요.",
+                                    course_id=payload.course_id,
+                                    session=session,
+                                    pipeline=pipeline,
+                                    conversation_history=history,
+                                    context="OpenAI API 키 미설정"
+                                )
+            except Exception as e:
+                import traceback
+                error_msg = str(e)
+                print(f"[CHAT DEBUG] ❌ Exception in transcript loading: {error_msg}")
+                print(f"[CHAT DEBUG] Traceback: {traceback.format_exc()}")
+                # 예외 발생 시 페르소나 적용된 오류 메시지 생성
+                if use_transcript_first:
+                    minutes = int(payload.current_time // 60) if payload.current_time else 0
+                    seconds = int(payload.current_time % 60) if payload.current_time else 0
+                    answer = _generate_persona_response(
+                        user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분의 강의 내용을 불러오는 중 오류가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 질문해달라고 말해주세요.",
+                        course_id=payload.course_id,
+                        session=session,
+                        pipeline=pipeline,
+                        conversation_history=history,
+                        context=f"오류 발생 위치: {minutes}분 {seconds}초"
+                    )
+                else:
+                    answer = _generate_persona_response(
+                        user_message="학생이 질문했지만 강의 내용을 불러오는 중 오류가 발생했습니다. 강사로서 정중하게 사과하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                        course_id=payload.course_id,
+                        session=session,
+                        pipeline=pipeline,
+                        conversation_history=history
+                    )
+        
+        # answer가 비어있으면 페르소나 적용된 기본 답변 제공
+        if not answer or not answer.strip():
+            print(f"[CHAT DEBUG] ⚠️ Answer is empty, providing default response")
+            if use_transcript_first and payload.current_time:
+                minutes = int(payload.current_time // 60)
+                seconds = int(payload.current_time % 60)
+                answer = _generate_persona_response(
+                    user_message=f"학생이 질문했지만 현재 {minutes}분 {seconds}초 부분에 대한 답변을 생성할 수 없었습니다. 강사로서 정중하게 사과하고, 다시 질문해주시거나 다른 질문을 해달라고 말해주세요.",
+                    course_id=payload.course_id,
+                    session=session,
+                    pipeline=pipeline,
+                    conversation_history=history,
+                    context=f"답변 생성 실패 위치: {minutes}분 {seconds}초"
+                )
+            else:
+                answer = _generate_persona_response(
+                    user_message="학생이 질문했지만 답변을 생성할 수 없었습니다. 강사로서 정중하게 사과하고, 다시 질문해달라고 말해주세요.",
+                    course_id=payload.course_id,
+                    session=session,
+                    pipeline=pipeline,
+                    conversation_history=history
+                )
         
         # 대화 히스토리에 현재 질문과 답변 추가
         history.append({"role": "user", "content": payload.question})
@@ -718,11 +1791,25 @@ def ask(
         )
     except Exception as e:
         error_msg = str(e)
-        # OpenAI 할당량 에러 처리
+        # OpenAI 할당량 에러 처리 (페르소나 적용)
         if "할당량" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg:
-            answer = "⚠️ OpenAI API 할당량이 초과되었습니다. OpenAI 계정의 크레딧을 확인하거나 결제 정보를 업데이트하세요. https://platform.openai.com/account/billing"
+            answer = _generate_persona_response(
+                user_message="학생이 질문했지만 OpenAI API 할당량이 초과되었습니다. 강사로서 정중하게 상황을 설명하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history,
+                context="OpenAI API 할당량 초과 오류"
+            )
         else:
-            answer = f"⚠️ 오류 발생: {error_msg}"
+            answer = _generate_persona_response(
+                user_message=f"학생이 질문했지만 오류가 발생했습니다: {error_msg[:100]}. 강사로서 정중하게 사과하고, 잠시 후 다시 시도해달라고 말해주세요.",
+                course_id=payload.course_id,
+                session=session,
+                pipeline=pipeline,
+                conversation_history=history,
+                context=f"오류: {error_msg[:200]}"
+            )
         
         return ChatResponse(
             answer=answer,
@@ -1116,18 +2203,22 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
     import json
     from sqlmodel import select
     from core.models import Video, Course
+    from urllib.parse import unquote
     
     try:
+        # course_id URL 디코딩 (이중 안전장치)
+        decoded_course_id = unquote(course_id) if course_id else course_id
+        
         # Course 정보 가져오기
-        course = session.get(Course, course_id)
+        course = session.get(Course, decoded_course_id)
         if not course:
-            print(f"[TRANSCRIPT DEBUG] Course not found: {course_id}")
+            print(f"[TRANSCRIPT DEBUG] Course not found: {course_id} (decoded: {decoded_course_id})")
             return None
         
         # Video 레코드에서 transcript_path 찾기
         videos = session.exec(
             select(Video).where(
-                Video.course_id == course_id,
+                Video.course_id == decoded_course_id,
                 Video.transcript_path.isnot(None)  # transcript_path가 있는 것만
             )
         ).all()
@@ -1139,19 +2230,110 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
             try:
                 from core.config import AppSettings
                 app_settings = AppSettings()
-                course_dir = app_settings.uploads_dir / course.instructor_id / course_id
-                print(f"[TRANSCRIPT DEBUG] Trying to find transcript files in: {course_dir}")
                 
-                # transcript_*.json 파일 찾기
-                transcript_files = list(course_dir.glob("transcript_*.json"))
-                if transcript_files:
-                    transcript_path = transcript_files[0]
-                    print(f"[TRANSCRIPT DEBUG] Found transcript file in filesystem: {transcript_path}")
-                else:
-                    print(f"[TRANSCRIPT DEBUG] No transcript files found in {course_dir}")
+                # 여러 가능한 경로 시도
+                search_paths = []
+                
+                # 여러 가능한 instructor_id 경로 시도
+                possible_instructor_ids = []
+                
+                # DB의 instructor_id가 있으면 우선적으로 사용
+                if course and course.instructor_id:
+                    possible_instructor_ids.append(course.instructor_id)
+                
+                # 일반적인 패턴 시도
+                possible_instructor_ids.extend([
+                    "jeon1234",  # 실제 파일 구조에 맞춤
+                    "test-instructor-1",
+                    "test-instructor",
+                ])
+                
+                # course_id에서 추론 (Biology-Concept-1 -> Biology 등)
+                if "-" in decoded_course_id:
+                    parts = decoded_course_id.split("-")
+                    if len(parts) > 0:
+                        base_name = parts[0].lower()
+                        possible_instructor_ids.extend([
+                            base_name,
+                            f"{base_name}1234",
+                            f"{base_name}-instructor-1",
+                        ])
+                
+                # 중복 제거 및 None 제거
+                possible_instructor_ids = list(dict.fromkeys([pid for pid in possible_instructor_ids if pid]))
+                
+                print(f"[TRANSCRIPT DEBUG] uploads_dir: {app_settings.uploads_dir}")
+                print(f"[TRANSCRIPT DEBUG] data_root: {app_settings.data_root}")
+                
+                # 1. uploads_dir 경로들 (가장 우선)
+                for instructor_id in possible_instructor_ids:
+                    if not instructor_id:
+                        continue
+                    search_paths.append(app_settings.uploads_dir / instructor_id / decoded_course_id)
+                
+                # 2. data 폴더 직접 경로들
+                # Path(__file__) = server/api/routers.py
+                # .parent = server/api
+                # .parent = server
+                # .parent = 프로젝트 루트
+                # 따라서 data 폴더는 프로젝트 루트에 있음
+                project_root = Path(__file__).resolve().parent.parent.parent
+                data_dir = project_root / app_settings.data_root
+                
+                # data/uploads/instructor_id/course_id
+                for instructor_id in possible_instructor_ids:
+                    if not instructor_id:
+                        continue
+                    search_paths.append(data_dir / "uploads" / instructor_id / decoded_course_id)
+                
+                # 3. 모든 uploads 폴더의 모든 instructor_id 하위에서 course_id 찾기
+                uploads_dir = app_settings.uploads_dir
+                if uploads_dir.exists():
+                    for instructor_dir in uploads_dir.iterdir():
+                        if instructor_dir.is_dir():
+                            course_dir = instructor_dir / decoded_course_id
+                            if course_dir.exists():
+                                search_paths.append(course_dir)
+                                print(f"[TRANSCRIPT DEBUG] Found course directory: {course_dir}")
+                
+                # 4. 마지막으로 data 폴더 루트에서 직접 검색
+                if data_dir.exists():
+                    search_paths.append(data_dir / decoded_course_id)
+                
+                print(f"[TRANSCRIPT DEBUG] Trying to find transcript files with possible instructor_ids: {possible_instructor_ids}")
+                print(f"[TRANSCRIPT DEBUG] Searching in {len(search_paths)} paths...")
+                
+                for course_dir in search_paths:
+                    print(f"[TRANSCRIPT DEBUG] Trying path: {course_dir}")
+                    
+                    if course_dir.exists():
+                        # transcript_*.json 파일 찾기
+                        transcript_files = list(course_dir.glob("transcript_*.json"))
+                        if transcript_files:
+                            transcript_path = transcript_files[0]
+                            print(f"[TRANSCRIPT DEBUG] ✅ Found transcript file in filesystem: {transcript_path}")
+                            break
+                        else:
+                            # *.json 파일도 찾아봐 (transcript_로 시작하지 않는 경우)
+                            json_files = list(course_dir.glob("*.json"))
+                            # transcript 관련 파일만 필터링
+                            transcript_json_files = [f for f in json_files if "transcript" in f.name.lower() or "caption" in f.name.lower() or "subtitle" in f.name.lower()]
+                            if transcript_json_files:
+                                transcript_path = transcript_json_files[0]
+                                print(f"[TRANSCRIPT DEBUG] ✅ Found transcript-related JSON file: {transcript_path}")
+                                break
+                            else:
+                                print(f"[TRANSCRIPT DEBUG] No transcript JSON files found in {course_dir}")
+                    else:
+                        print(f"[TRANSCRIPT DEBUG] Directory does not exist: {course_dir}")
+                
+                if not transcript_path:
+                    print(f"[TRANSCRIPT DEBUG] ❌ Could not find transcript file in any of the tried paths")
                     return None
             except Exception as e:
                 print(f"[TRANSCRIPT DEBUG] Error searching filesystem: {e}")
+                import traceback
+                print(f"[TRANSCRIPT DEBUG] Traceback: {traceback.format_exc()}")
                 return None
         else:
             # 첫 번째 transcript 파일 로드
@@ -1176,7 +2358,7 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
             return None
         
         if transcript_text and len(transcript_text.strip()) > 0:
-            print(f"✅ Loaded transcript from file for course {course_id}: {transcript_path} (length: {len(transcript_text)})")
+            print(f"✅ Loaded transcript from file for course {decoded_course_id}: {transcript_path} (length: {len(transcript_text)})")
             if return_segments:
                 return {
                     "text": transcript_text,
@@ -1188,7 +2370,7 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
         return None
     except Exception as e:
         import traceback
-        print(f"⚠️ Failed to load transcript for course {course_id}: {e}")
+        print(f"⚠️ Failed to load transcript for course {course_id} (decoded: {decoded_course_id}): {e}")
         print(f"[TRANSCRIPT DEBUG] Traceback: {traceback.format_exc()}")
         return None
 

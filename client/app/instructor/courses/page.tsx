@@ -43,8 +43,6 @@ export default function InstructorCoursesPage() {
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editCategory, setEditCategory] = useState("");
-  const [editingInstructorName, setEditingInstructorName] = useState(false);
-  const [editInstructorName, setEditInstructorName] = useState("");
   const [showCreateCourseModal, setShowCreateCourseModal] = useState(false);
   const [newCourseId, setNewCourseId] = useState("");
   const [newCourseTitle, setNewCourseTitle] = useState("");
@@ -52,18 +50,31 @@ export default function InstructorCoursesPage() {
   const [newTotalChapters, setNewTotalChapters] = useState<number | "">("");
 
   useEffect(() => {
-    // 로그인 확인
+    // 로그인 확인 (새 인증 시스템 우선, 구 시스템 fallback)
     if (typeof window !== "undefined") {
-      const id = localStorage.getItem("instructor_id");
-      const token = localStorage.getItem("instructor_token");
+      // 새 인증 시스템 확인
+      const { isAuthenticated, getUser, getToken } = require("../../../lib/auth");
+      const token = getToken();
+      const user = getUser();
       
-      if (!id || !token) {
-        router.push("/instructor/login");
+      if (token && isAuthenticated() && user?.role === "instructor") {
+        setInstructorId(user.id);
+        fetchCourses(token);
         return;
       }
       
-      setInstructorId(id);
-      fetchCourses(token);
+      // 구 시스템 fallback
+      const oldId = localStorage.getItem("instructor_id");
+      const oldToken = localStorage.getItem("instructor_token");
+      
+      if (oldId && oldToken) {
+        setInstructorId(oldId);
+        fetchCourses(oldToken);
+        return;
+      }
+      
+      // 인증되지 않은 경우 홈으로 이동
+      router.push("/");
     }
   }, [router]);
 
@@ -79,18 +90,16 @@ export default function InstructorCoursesPage() {
       });
       setCourses(data);
       
-      // 디버깅: API 응답 확인
-      console.log("강의 목록 API 응답:", data);
-      if (data.length > 0) {
-        console.log("첫 번째 강의 데이터:", data[0]);
-        console.log("chapter_count:", data[0].chapter_count);
-        console.log("total_chapters:", data[0].total_chapters);
-      }
-      
       // 강사명 가져오기 (첫 번째 강의에서)
       if (data.length > 0 && data[0].instructor_name) {
         setInstructorName(data[0].instructor_name);
-        setEditInstructorName(data[0].instructor_name);
+      } else {
+        // 강사명이 없으면 사용자 정보에서 가져오기
+        const { getUser } = require("../../../lib/auth");
+        const user = getUser();
+        if (user?.name) {
+          setInstructorName(user.name);
+        }
       }
     } catch (err) {
       console.error("강의 목록 조회 오류:", err);
@@ -112,7 +121,14 @@ export default function InstructorCoursesPage() {
     setDeletingCourseId(courseId);
     
     try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      // 새 인증 시스템 우선, 구 시스템 fallback
+      const { getToken, isAuthenticated } = require("../../../lib/auth");
+      let token = getToken();
+      
+      if (!token || !isAuthenticated()) {
+        token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      }
+      
       if (!token) {
         throw new Error("로그인이 필요합니다.");
       }
@@ -167,9 +183,20 @@ export default function InstructorCoursesPage() {
   };
 
   const handleRefresh = () => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
-    if (token) {
-      fetchCourses(token);
+    // 새 인증 시스템 우선, 구 시스템 fallback
+    if (typeof window !== "undefined") {
+      const { getToken, isAuthenticated } = require("../../../lib/auth");
+      const token = getToken();
+      
+      if (token && isAuthenticated()) {
+        fetchCourses(token);
+        return;
+      }
+      
+      const oldToken = localStorage.getItem("instructor_token");
+      if (oldToken) {
+        fetchCourses(oldToken);
+      }
     }
   };
 
@@ -181,7 +208,14 @@ export default function InstructorCoursesPage() {
 
   const handleSaveEdit = async (courseId: string) => {
     try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      // 새 인증 시스템 우선, 구 시스템 fallback
+      const { getToken, isAuthenticated } = require("../../../lib/auth");
+      let token = getToken();
+      
+      if (!token || !isAuthenticated()) {
+        token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      }
+      
       if (!token) {
         throw new Error("로그인이 필요합니다.");
       }
@@ -214,44 +248,6 @@ export default function InstructorCoursesPage() {
     setEditCategory("");
   };
 
-  const handleEditInstructorName = () => {
-    setEditingInstructorName(true);
-    setEditInstructorName(instructorName || "");
-  };
-
-  const handleSaveInstructorName = async () => {
-    try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
-      if (!token) {
-        throw new Error("로그인이 필요합니다.");
-      }
-
-      await apiPatch(
-        `/api/instructor/profile`,
-        {
-          name: editInstructorName.trim() || null,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      setInstructorName(editInstructorName.trim() || null);
-      setEditingInstructorName(false);
-      handleRefresh(); // 강의 목록 새로고침하여 강사명 반영
-    } catch (err) {
-      console.error("강사명 수정 오류:", err);
-      const apiError = handleApiError(err);
-      alert(`강사명 수정 실패: ${apiError.message}`);
-    }
-  };
-
-  const handleCancelInstructorNameEdit = () => {
-    setEditingInstructorName(false);
-    setEditInstructorName(instructorName || "");
-  };
 
   const handleCreateCourse = async () => {
     if (!newCourseId.trim()) {
@@ -268,7 +264,14 @@ export default function InstructorCoursesPage() {
     }
 
     try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      // 새 인증 시스템 우선, 구 시스템 fallback
+      const { getToken, isAuthenticated } = require("../../../lib/auth");
+      let token = getToken();
+      
+      if (!token || !isAuthenticated()) {
+        token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      }
+      
       if (!token) {
         throw new Error("로그인이 필요합니다.");
       }
@@ -327,54 +330,20 @@ export default function InstructorCoursesPage() {
               </div>
               <div className="flex-1">
                 <h1 className="text-3xl font-bold text-slate-900">내 강의 관리</h1>
-                {editingInstructorName ? (
-                  <div className="mt-2 flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={editInstructorName}
-                      onChange={(e) => setEditInstructorName(e.target.value)}
-                      placeholder="강사명을 입력하세요"
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleSaveInstructorName}
-                      className="rounded-lg bg-green-100 p-1.5 text-green-600 transition-colors hover:bg-green-200"
-                      title="저장"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={handleCancelInstructorNameEdit}
-                      className="rounded-lg bg-slate-100 p-1.5 text-slate-600 transition-colors hover:bg-slate-200"
-                      title="취소"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="mt-1 flex items-center gap-2">
-                    <p className="text-sm text-slate-500">
-                      {instructorName ? (
-                        <>
-                          <span className="font-medium text-slate-700">{instructorName}</span>
-                          {instructorId && (
-                            <span className="text-slate-400"> ({instructorId})</span>
-                          )}
-                        </>
-                      ) : (
-                        instructorId && `강사 ID: ${instructorId}`
-                      )}
-                    </p>
-                    <button
-                      onClick={handleEditInstructorName}
-                      className="rounded-lg bg-blue-100 p-1 text-blue-600 transition-colors hover:bg-blue-200"
-                      title="강사명 수정"
-                    >
-                      <Edit2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
+                <div className="mt-1">
+                  <p className="text-sm text-slate-500">
+                    {instructorName ? (
+                      <>
+                        <span className="font-medium text-slate-700">{instructorName} 선생님</span>
+                        {instructorId && (
+                          <span className="text-slate-400"> ({instructorId})</span>
+                        )}
+                      </>
+                    ) : (
+                      instructorId && `강사 ID: ${instructorId}`
+                    )}
+                  </p>
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -560,11 +529,11 @@ export default function InstructorCoursesPage() {
                     {/* 챕터 개수 표시 */}
                     {course.total_chapters ? (
                       <div className="mt-2 text-xs text-slate-500">
-                        등록된 챕터: {course.chapter_count ?? 0}/{course.total_chapters}
+                        등록된 강의의: {course.chapter_count ?? 0}/{course.total_chapters}
                       </div>
                     ) : course.chapter_count !== undefined ? (
                       <div className="mt-2 text-xs text-slate-500">
-                        등록된 챕터: {course.chapter_count}개
+                        등록된 강의의: {course.chapter_count}개
                       </div>
                     ) : null}
 
@@ -575,7 +544,7 @@ export default function InstructorCoursesPage() {
                           href={`/instructor/courses/${course.id}/chapters`}
                           className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors group-hover:bg-blue-100"
                         >
-                          <span>챕터 관리</span>
+                          <span>강의 관리</span>
                           <BookOpen className="h-4 w-4" />
                         </Link>
                       )}

@@ -20,6 +20,7 @@ type CourseInfo = {
   title: string;
   category?: string;
   instructor_name?: string;
+  instructor_id?: string;
 };
 
 export default function StudentPlayPage({ params }: Props) {
@@ -125,6 +126,7 @@ export default function StudentPlayPage({ params }: Props) {
               <VideoPlayer
                 ref={videoPlayerRef}
                 src={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/video/${course_id}`}
+                courseId={course_id}
                 onTimeUpdate={handleVideoTimeUpdate}
               />
             </div>
@@ -133,6 +135,7 @@ export default function StudentPlayPage({ params }: Props) {
                 <ChatPanel
                   courseId={course_id}
                   courseTitle={courseInfo?.title}
+                  instructorName={courseInfo?.instructor_name}
                   onTimestampClick={handleTimestampClick}
                   currentTime={currentVideoTime}
                 />

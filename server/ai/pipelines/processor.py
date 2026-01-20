@@ -9,6 +9,8 @@ from typing import Optional, List, Dict, Any, Callable
 from ai.config import AISettings
 from ai.pipelines.rag import RAGPipeline
 from ai.services.stt import transcribe_video
+from ai.style_analyzer import analyze_instructor_style
+import json
 
 
 def process_course_assets(
@@ -20,6 +22,7 @@ def process_course_assets(
     pdf_path: Optional[Path] = None,
     smi_path: Optional[Path] = None,
     update_progress: Optional[Callable[[int, str], None]] = None,
+    instructor_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     백엔드 A: 자동화 파이프라인 오케스트레이션
@@ -51,6 +54,7 @@ def process_course_assets(
     try:
         texts: List[str] = []
         ingested_count = 0
+        persona_profile_json = None  # Style Analyzer 결과 (초기화)
 
         # 1. Transcript 생성 (SMI 우선, 없으면 STT)
         # SMI가 있으면 STT를 건너뛰고 자막을 transcript로 사용
@@ -82,7 +86,8 @@ def process_course_assets(
                     raise
 
         # STT용 media_path 정규화 (SMI가 없을 때만 사용)
-        media_path = audio_path or video_path
+        # 비디오는 프론트엔드 영상 출력용이므로 STT하지 않음 (오디오 파일만 STT)
+        media_path = audio_path  # video_path는 STT에서 제외
         
         # 경로를 절대 경로로 변환
         if media_path:
@@ -370,16 +375,45 @@ def process_course_assets(
                 print(error_msg)
                 # 오류가 발생해도 계속 진행
         
-        # 3. 페르소나 추출 및 RAG 인제스트
+        # 3. Style Analyzer 실행 (초반 5분 분석) 및 페르소나 추출
+        persona_profile_json = None
+        if segments and len(segments) > 0:
+            if update_progress:
+                update_progress(75, "강사 스타일 분석 중...")
+            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 5분 분석)...")
+            try:
+                persona_profile = analyze_instructor_style(segments, settings=settings)
+                persona_profile_json = json.dumps(persona_profile, ensure_ascii=False)
+                print(f"[{course_id}] ✅ Style Analyzer 완료: {persona_profile_json[:100]}...")
+                
+                # persona_profile은 반환값에 포함하여 backB가 DB에 저장하도록 함
+                
+            except Exception as e:
+                error_msg = f"[{course_id}] ❌ Style Analyzer 오류: {str(e)}"
+                print(error_msg)
+                # Style Analyzer 실패해도 계속 진행
+        
+        # 4. 페르소나 프롬프트 생성 및 RAG 인제스트
         if texts:
             if update_progress:
-                update_progress(75, "페르소나 추출 중...")
-            print(f"[{course_id}] 🧑‍🏫 페르소나 추출 시작...")
-            # 동적 페르소나 프롬프트 생성
+                update_progress(80, "페르소나 프롬프트 생성 중...")
+            print(f"[{course_id}] 🧑‍🏫 페르소나 프롬프트 생성 시작...")
+            # Style Analyzer 결과가 있으면 사용, 없으면 기존 방식 사용
             try:
-                persona_prompt = pipeline.generate_persona_prompt(
-                    course_id=course_id, sample_texts=texts
-                )
+                if persona_profile_json:
+                    # Style Analyzer 결과를 사용하여 페르소나 프롬프트 생성
+                    from ai.style_analyzer import create_persona_prompt
+                    persona_dict = json.loads(persona_profile_json)
+                    persona_prompt = create_persona_prompt(persona_dict)
+                    # ⚠️ 강사 정보는 ChromaDB에 저장하지 않음 (DB에서 동적으로 로드)
+                    # instructor_info는 분석 시에만 참고하고, 페르소나 프롬프트에는 포함하지 않음
+                else:
+                    # 기존 방식 (fallback) - 강사 정보는 포함하지 않음 (DB에서 동적으로 로드)
+                    persona_prompt = pipeline.generate_persona_prompt(
+                        course_id=course_id, 
+                        sample_texts=texts,
+                        instructor_info=None  # ChromaDB에 저장하지 않음
+                    )
                 
                 if update_progress:
                     update_progress(85, "페르소나 저장 중...")
@@ -394,12 +428,12 @@ def process_course_assets(
                     },
                 )
                 ingested_count += result.get("ingested", 0)
-                print(f"[{course_id}] ✅ 페르소나 추출 및 저장 완료")
+                print(f"[{course_id}] ✅ 페르소나 프롬프트 저장 완료")
                 if update_progress:
                     update_progress(95, "최종 처리 중...")
                 
             except Exception as e:
-                error_msg = f"[{course_id}] ❌ 페르소나 추출 오류: {str(e)}"
+                error_msg = f"[{course_id}] ❌ 페르소나 프롬프트 생성 오류: {str(e)}"
                 print(error_msg)
                 # 페르소나 추출 실패해도 계속 진행
         else:
@@ -409,6 +443,7 @@ def process_course_assets(
             "status": "completed",
             "ingested_count": ingested_count,
             "transcript_path": transcript_path,  # STT 결과 파일 경로 (있는 경우)
+            "persona_profile": persona_profile_json,  # Style Analyzer 결과 (JSON 문자열, backB가 DB에 저장)
         }
         
     except Exception as e:

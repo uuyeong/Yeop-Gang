@@ -1,6 +1,7 @@
 from typing import Literal, Optional
+import re
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class IngestRequest(BaseModel):
@@ -86,3 +87,46 @@ class QuizResult(BaseModel):
     percentage: float
     correct_answers: list[int]
     wrong_answers: list[int]
+
+
+# ==================== 인증 관련 스키마 ====================
+
+class RegisterInstructorRequest(BaseModel):
+    """강사 등록 요청"""
+    id: str = Field(..., description="강사 ID")
+    name: str = Field(..., description="이름")
+    email: str = Field(..., description="이메일")
+    password: str = Field(..., min_length=8, description="비밀번호 (최소 8자)")
+    profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
+    bio: Optional[str] = Field(default=None, description="자기소개")
+    phone: Optional[str] = Field(default=None, description="전화번호")
+    specialization: Optional[str] = Field(default=None, description="전문 분야")
+    initial_courses: Optional[list[dict]] = Field(default=None, description="초기 강의 정보 목록")
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        """간단한 이메일 형식 검증"""
+        if not v:
+            raise ValueError("이메일은 필수입니다.")
+        # 기본적인 이메일 형식 검증
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, v):
+            raise ValueError("올바른 이메일 형식이 아닙니다.")
+        return v
+
+
+class LoginRequest(BaseModel):
+    """로그인 요청"""
+    user_id: str = Field(..., description="사용자 ID")
+    password: str = Field(..., description="비밀번호")
+    role: Literal["instructor", "student"] = Field(..., description="사용자 역할")
+
+
+class TokenResponse(BaseModel):
+    """토큰 응답"""
+    access_token: str
+    token_type: str = "bearer"
+    user_id: str
+    role: str
+    expires_in: int = 86400  # 24시간

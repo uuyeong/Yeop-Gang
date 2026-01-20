@@ -20,7 +20,13 @@ class Instructor(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: Optional[str] = None
     email: Optional[str] = None
+    password_hash: Optional[str] = Field(default=None, description="비밀번호 해시")
+    profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
+    bio: Optional[str] = Field(default=None, description="자기소개")
+    phone: Optional[str] = Field(default=None, description="전화번호")
+    specialization: Optional[str] = Field(default=None, description="전문 분야")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     courses: list["Course"] = Relationship(back_populates="instructor")
 
@@ -46,6 +52,7 @@ class Course(SQLModel, table=True):
     )
     status: CourseStatus = Field(default=CourseStatus.processing)
     progress: int = Field(default=0, description="처리 진행도 (0-100)")  # 0-100%
+    persona_profile: Optional[str] = Field(default=None, description="강사 스타일 분석 결과 (JSON 문자열)")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -21,22 +21,26 @@ from api.dh_schemas import (
     LoginRequest,
     TokenResponse,
     RegisterInstructorRequest,
+    UpdateInstructorRequest,
     RegisterStudentRequest,
     EnrollCourseRequest,
     EnrollCourseResponse,
     SafeChatResponse,
-    UpdateCourseRequest,
-    UpdateInstructorRequest,
+    InstructorProfileResponse,
     CreateCourseRequest,
+    UpdateCourseRequest,
 )
-from core.db import get_session
+from core.db import get_session, engine
 from core.dh_auth import (
     get_current_user,
+    get_current_user_optional,
     require_instructor,
     require_student,
     require_any_user,
     verify_course_access,
     create_access_token,
+    get_password_hash,
+    verify_password,
 )
 from core.dh_guardrails import apply_guardrails
 from core.dh_models import Student, CourseEnrollment, EnrollmentStatus
@@ -61,23 +65,74 @@ async def register_instructor(
     payload: RegisterInstructorRequest,
     session: Session = Depends(get_session),
 ) -> TokenResponse:
-    """강사 등록"""
-    # 기존 강사 확인
-    existing = session.get(Instructor, payload.id)
-    if existing:
+    """강사 등록 - 프로필 정보와 함께 강사 계정 생성"""
+    from datetime import datetime
+    from core.db import init_db
+    
+    # 데이터베이스가 없으면 자동으로 생성
+    init_db()
+    
+    # 기존 강사 확인 (ID 또는 이메일 중복 체크)
+    existing_by_id = session.get(Instructor, payload.id)
+    if existing_by_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Instructor already exists",
+            detail="Instructor ID already exists",
         )
     
-    # 강사 생성
+    # 이메일 중복 확인
+    existing_by_email = session.exec(
+        select(Instructor).where(Instructor.email == payload.email)
+    ).first()
+    if existing_by_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+    
+    # 비밀번호 해싱
+    password_hash = get_password_hash(payload.password)
+    
+    # 강사 생성 (프로필 정보 포함)
+    # 빈 문자열을 None으로 변환
+    profile_image_url = payload.profile_image_url.strip() if payload.profile_image_url and payload.profile_image_url.strip() else None
+    bio = payload.bio.strip() if payload.bio and payload.bio.strip() else None
+    # specialization은 필수이므로 빈 문자열 체크만
+    specialization = payload.specialization.strip() if payload.specialization else ""
+    
     instructor = Instructor(
         id=payload.id,
         name=payload.name,
         email=payload.email,
+        password_hash=password_hash,
+        profile_image_url=profile_image_url,
+        bio=bio,
+        phone=None,  # 전화번호 필드 제거
+        specialization=specialization,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
     session.add(instructor)
     session.commit()
+    session.refresh(instructor)
+    
+    # 초기 강의 정보가 있으면 함께 등록
+    if payload.initial_courses:
+        from core.models import Course, CourseStatus
+        for course_info in payload.initial_courses:
+            course_id = course_info.get("course_id") or course_info.get("id")
+            course_title = course_info.get("title") or course_info.get("name")
+            if course_id and course_title:
+                course = Course(
+                    id=course_id,
+                    instructor_id=instructor.id,
+                    title=course_title,
+                    status=CourseStatus.processing,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                session.add(course)
+        session.commit()
     
     # JWT 토큰 생성
     token = create_access_token(
@@ -97,6 +152,10 @@ async def register_student(
     session: Session = Depends(get_session),
 ) -> TokenResponse:
     """학생 등록"""
+    from core.db import init_db
+    
+    # 데이터베이스가 없으면 자동으로 생성
+    init_db()
     # 기존 학생 확인
     existing = session.get(Student, payload.id)
     if existing:
@@ -131,7 +190,7 @@ async def login(
     payload: LoginRequest,
     session: Session = Depends(get_session),
 ) -> TokenResponse:
-    """로그인 (간단한 구현 - 사용자가 없으면 자동 생성)"""
+    """로그인 - ID와 비밀번호로 인증"""
     if payload.role == "instructor":
         user = session.get(Instructor, payload.user_id)
         # 강사가 없으면 자동으로 생성
@@ -159,12 +218,35 @@ async def login(
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid role",
+            detail="Invalid role. Must be 'instructor' or 'student'",
         )
     
-    # 실제로는 비밀번호 검증 필요
-    # if not verify_password(payload.password, user.hashed_password):
-    #     raise HTTPException(...)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials - User not found",
+        )
+    
+    # 강사의 경우 비밀번호 검증
+    if payload.role == "instructor":
+        if not hasattr(user, "password_hash") or not user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials - Password not set",
+            )
+        
+        if not verify_password(payload.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials - Wrong password",
+            )
+    
+    # 학생의 경우 비밀번호 검증 (향후 구현 예정)
+    # elif payload.role == "student":
+    #     if not hasattr(user, "password_hash") or not user.password_hash:
+    #         raise HTTPException(...)
+    #     if not verify_password(payload.password, user.password_hash):
+    #         raise HTTPException(...)
     
     token = create_access_token(
         data={"sub": user.id, "role": payload.role}
@@ -282,15 +364,54 @@ async def instructor_upload(
     
     course = session.get(Course, course_id)
     if not course:
-        course = Course(
-            id=course_id,
-            instructor_id=instructor_id,
-            title=course_title.strip() if course_title.strip() else course_id,  # 제목이 없으면 course_id 사용
-            category=course_category.strip() if course_category and course_category.strip() else None,
-            parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
-            chapter_number=chapter_number,
-        )
-        session.add(course)
+        # Course 생성 시 is_public 컬럼이 있으면 기본값 설정
+        from sqlalchemy import inspect, text
+        try:
+            inspector = inspect(engine)
+            if "course" in inspector.get_table_names():
+                columns = [col["name"] for col in inspector.get_columns("course")]
+                has_is_public = "is_public" in columns
+            else:
+                has_is_public = False
+        except Exception:
+            has_is_public = False
+        
+        if has_is_public:
+            # is_public 컬럼이 있으면 SQL로 직접 INSERT
+            from datetime import datetime
+            session.execute(
+                text("""
+                    INSERT INTO course 
+                    (id, instructor_id, title, category, parent_course_id, chapter_number, status, progress, created_at, updated_at, is_public)
+                    VALUES 
+                    (:id, :instructor_id, :title, :category, :parent_course_id, :chapter_number, :status, :progress, :created_at, :updated_at, 1)
+                """),
+                {
+                    "id": course_id,
+                    "instructor_id": instructor_id,
+                    "title": course_title.strip() if course_title.strip() else course_id,
+                    "category": course_category.strip() if course_category and course_category.strip() else None,
+                    "parent_course_id": parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
+                    "chapter_number": chapter_number,
+                    "status": CourseStatus.processing.value,
+                    "progress": 0,
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }
+            )
+            session.flush()
+            course = session.get(Course, course_id)
+        else:
+            # is_public 컬럼이 없으면 일반 방식으로 생성
+            course = Course(
+                id=course_id,
+                instructor_id=instructor_id,
+                title=course_title.strip() if course_title.strip() else course_id,
+                category=course_category.strip() if course_category and course_category.strip() else None,
+                parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
+                chapter_number=chapter_number,
+            )
+            session.add(course)
     elif course.instructor_id != instructor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -532,6 +653,38 @@ async def instructor_delete_course(
     }
 
 
+@router.get("/instructor/profile", response_model=InstructorProfileResponse)
+async def get_instructor_profile(
+    current_user: dict = Depends(require_instructor),
+    session: Session = Depends(get_session),
+) -> InstructorProfileResponse:
+    """강사 프로필 정보 조회 (자신의 프로필만)"""
+    instructor = session.get(Instructor, current_user["id"])
+    if not instructor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Instructor not found",
+        )
+    
+    # 강의 개수 조회
+    course_count = len(session.exec(
+        select(Course).where(Course.instructor_id == instructor.id)
+    ).all())
+    
+    return InstructorProfileResponse(
+        id=instructor.id,
+        name=instructor.name or "",
+        email=instructor.email or "",
+        profile_image_url=instructor.profile_image_url,
+        bio=instructor.bio,
+        phone=instructor.phone,
+        specialization=instructor.specialization,
+        created_at=instructor.created_at.isoformat() if instructor.created_at else "",
+        updated_at=instructor.updated_at.isoformat() if instructor.updated_at else "",
+        course_count=course_count,
+    )
+
+
 # ==================== 학생 전용 엔드포인트 ====================
 
 @router.post("/student/enroll", response_model=EnrollCourseResponse)
@@ -696,6 +849,58 @@ async def get_video(
     raise HTTPException(status_code=404, detail="Video/Audio not found")
 
 
+@router.get("/courses/{course_id}/transcript")
+async def get_transcript(
+    course_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    session: Session = Depends(get_session),
+) -> dict:
+    """전사된 transcript JSON 데이터 조회 (자막용)
+    
+    자막은 강의 시청에 필수적이므로 인증을 선택적으로 처리.
+    토큰이 없어도 transcript에 접근 가능하도록 함.
+    """
+    try:
+        from api.routers import _load_transcript_for_course
+        from urllib.parse import unquote
+        from core.dh_auth import get_current_user_optional
+        
+        # course_id URL 디코딩
+        decoded_course_id = unquote(course_id) if course_id else course_id
+        
+        # transcript 로드 (권한 체크 없이 파일만 확인)
+        user_id = current_user.get('id', 'anonymous') if current_user else 'anonymous'
+        print(f"[TRANSCRIPT API] Loading transcript for course_id: {decoded_course_id} (user: {user_id})")
+        transcript_data = _load_transcript_for_course(decoded_course_id, session, return_segments=True)
+        
+        if transcript_data is None:
+            print(f"[TRANSCRIPT API] ❌ Transcript not found for course_id: {decoded_course_id}")
+            raise HTTPException(status_code=404, detail="Transcript not found for this course")
+        
+        # segments가 없으면 빈 배열 반환
+        if isinstance(transcript_data, dict):
+            segments = transcript_data.get("segments", [])
+            print(f"[TRANSCRIPT API] ✅ Found transcript with {len(segments)} segments for course_id: {decoded_course_id}")
+            return {
+                "text": transcript_data.get("text", ""),
+                "segments": segments
+            }
+        else:
+            # 텍스트만 있는 경우
+            print(f"[TRANSCRIPT API] ⚠️ Transcript found but no segments for course_id: {decoded_course_id}")
+            return {
+                "text": transcript_data,
+                "segments": []
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[TRANSCRIPT API] ❌ Error loading transcript: {e}")
+        print(f"[TRANSCRIPT API] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error loading transcript: {str(e)}")
+
+
 @router.post("/chat/ask", response_model=SafeChatResponse)
 async def ask(
     payload: QueryRequest,
@@ -714,11 +919,87 @@ async def ask(
         setattr(ask, '_conversation_history', {})
     history = getattr(ask, '_conversation_history', {}).get(conversation_id, [])
     
+    # 질문 분석: 인사말인지, 긍정적 피드백인지 확인
+    question_lower = payload.question.lower().strip()
+    question_trimmed = payload.question.strip()
+    
+    # 인사말 키워드 (간단한 인사만, 불필요한 설명 없이)
+    greeting_keywords = [
+        "안녕", "안녕하세요", "안녕하셔", "안녕하십니까",
+        "쌤 안녕", "쌤안녕", "선생님 안녕", "선생님안녕",
+        "하이", "hi", "hello"
+    ]
+    is_greeting = any(kw in question_lower for kw in greeting_keywords) and len(question_trimmed) < 20
+    
+    # 인사말이면 간단하게만 답변
+    if is_greeting:
+        answer = "안녕하세요! 궁금한 점이 있으면 언제든지 물어보세요. 😊"
+        
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 20:
+            history = history[-20:]
+        getattr(ask, '_conversation_history', {})[conversation_id] = history
+        
+        return SafeChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+            is_safe=True,
+            filtered=False,
+        )
+    
+    # 긍정적 피드백 키워드 (간단하게 답변, API 호출 없이 템플릿 응답)
+    positive_feedback_keywords = [
+        "이해가 가", "이해가 되", "알았", "알겠", "이해했", "이해됐", 
+        "이해했어", "알겠어", "이해됐어", "이해가 돼", "이해가 되네",
+        "좋아", "좋아요", "감사", "고마워", "고마워요", "네", "응", "예",
+        "이제 알았", "이제 알겠", "이제 이해했", "이제 이해했어", "이제 이해됐",
+        "아하 이해", "아하 알았", "아하 알겠", "이해됐어요", "이해가 됐어요",
+        "이해가 됐", "알겠어요", "알았어요", "이해했어요"
+    ]
+    is_positive_feedback = any(kw in question_lower for kw in positive_feedback_keywords)
+    
+    # 긍정적 피드백이면 API 호출 없이 바로 템플릿 응답 반환
+    if is_positive_feedback:
+        answer = "좋아요! 잘 이해하셨네요. 궁금한 점이 더 있으면 언제든지 물어보세요. 😊"
+        
+        # 대화 히스토리 업데이트
+        history.append({"role": "user", "content": payload.question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 20:
+            history = history[-20:]
+        getattr(ask, '_conversation_history', {})[conversation_id] = history
+        
+        return SafeChatResponse(
+            answer=answer,
+            sources=[],
+            conversation_id=conversation_id,
+            course_id=payload.course_id,
+            is_safe=True,
+            filtered=False,
+        )
+    
+    # 강사 정보 가져오기
+    instructor_info = None
+    course = session.get(Course, payload.course_id)
+    if course:
+        instructor = session.get(Instructor, course.instructor_id)
+        if instructor:
+            instructor_info = {
+                "name": instructor.name,
+                "bio": instructor.bio,
+                "specialization": instructor.specialization,
+            }
+    
     # RAG 쿼리 실행
     result = pipeline.query(
         payload.question,
         course_id=payload.course_id,
-        conversation_history=history
+        conversation_history=history,
+        instructor_info=instructor_info
     )
     
     answer = result.get("answer", "")
