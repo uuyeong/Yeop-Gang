@@ -2,30 +2,26 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BookOpen, Upload, GraduationCap, PlayCircle } from "lucide-react";
-import { isAuthenticated, getUser } from "@/lib/auth";
+import { useRouter } from "next/navigation";
+import { BookOpen, GraduationCap, PlayCircle, Settings } from "lucide-react";
+import { isAuthenticated, getUser, getToken } from "@/lib/auth";
+import LoginModal from "@/components/LoginModal";
+import RegisterModal from "@/components/RegisterModal";
 
 export default function Home() {
+  const router = useRouter();
   const [isInstructor, setIsInstructor] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
 
   useEffect(() => {
     // 인증 상태 확인 및 강사 여부 체크
-    if (isAuthenticated()) {
-      const user = getUser();
-      setIsInstructor(user?.role === "instructor");
-    } else {
-      setIsInstructor(false);
-    }
+    checkAuth();
 
     // storage 이벤트 리스너 (다른 탭에서 로그인/로그아웃 시 동기화)
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === "yeopgang_access_token" || e.key === "yeopgang_user") {
-        if (isAuthenticated()) {
-          const user = getUser();
-          setIsInstructor(user?.role === "instructor");
-        } else {
-          setIsInstructor(false);
-        }
+        checkAuth();
       }
     };
 
@@ -35,6 +31,56 @@ export default function Home() {
       window.removeEventListener("storage", handleStorageChange);
     };
   }, []);
+
+  const checkAuth = () => {
+    if (isAuthenticated()) {
+      const user = getUser();
+      setIsInstructor(user?.role === "instructor");
+    } else {
+      setIsInstructor(false);
+    }
+  };
+
+  const handleLoginSuccess = (data: { user_id: string; role: string }) => {
+    checkAuth();
+    setShowLoginModal(false);
+    if (data.role === "instructor") {
+      router.push("/instructor/courses");
+    }
+  };
+
+  const handleRegisterSuccess = (data: { user_id: string; role: string }) => {
+    checkAuth();
+    setShowRegisterModal(false);
+    if (data.role === "instructor") {
+      router.push("/instructor/courses");
+    }
+  };
+
+  const handleManageCourses = () => {
+    // 새 인증 시스템 우선 시도
+    const token = getToken();
+    if (token && isAuthenticated()) {
+      const user = getUser();
+      if (user?.role === "instructor") {
+        router.push("/instructor/courses");
+        return;
+      }
+    }
+    
+    // 구 시스템 fallback
+    if (typeof window !== "undefined") {
+      const oldToken = localStorage.getItem("instructor_token");
+      const oldId = localStorage.getItem("instructor_id");
+      if (oldToken && oldId) {
+        router.push("/instructor/courses");
+        return;
+      }
+    }
+    
+    // 인증되지 않은 경우 로그인 모달 표시
+    setShowLoginModal(true);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
@@ -55,23 +101,22 @@ export default function Home() {
 
         {/* 메인 액션 버튼 - 학생 중심 */}
         <div className="mb-20 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-          {/* 강사 로그인 시에만 강의 업로드 버튼 표시 */}
-          {isInstructor && (
-            <Link
-              href="/instructor/upload"
-              className="group flex items-center gap-3 rounded-xl bg-blue-600 px-8 py-4 text-base font-semibold text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl"
-            >
-              <Upload className="h-5 w-5" />
-              <span>강의 업로드</span>
-            </Link>
-          )}
           <Link
-            href="/student"
+            href="/student/courses"
             className="group flex items-center gap-3 rounded-xl border-2 border-slate-300 bg-white px-8 py-4 text-base font-semibold text-slate-700 transition-all hover:border-blue-500 hover:bg-blue-50"
           >
             <GraduationCap className="h-5 w-5" />
             <span>강의 목록 보기</span>
           </Link>
+          {isInstructor && (
+            <button
+              onClick={handleManageCourses}
+              className="group flex items-center gap-3 rounded-xl bg-blue-600 px-8 py-4 text-base font-semibold text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl"
+            >
+              <Settings className="h-5 w-5" />
+              <span>내 강의 관리</span>
+            </button>
+          )}
         </div>
 
         {/* 기능 소개 */}
@@ -113,6 +158,22 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* 로그인 모달 */}
+      {showLoginModal && (
+        <LoginModal
+          onClose={() => setShowLoginModal(false)}
+          onSuccess={handleLoginSuccess}
+        />
+      )}
+
+      {/* 회원가입 모달 */}
+      {showRegisterModal && (
+        <RegisterModal
+          onClose={() => setShowRegisterModal(false)}
+          onSuccess={handleRegisterSuccess}
+        />
+      )}
     </div>
   );
 }

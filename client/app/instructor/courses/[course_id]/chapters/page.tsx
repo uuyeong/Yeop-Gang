@@ -56,20 +56,35 @@ export default function InstructorChaptersPage() {
   const [showUploadForm, setShowUploadForm] = useState(false);
 
   useEffect(() => {
-    // 로그인 확인
+    // 로그인 확인 (새 인증 시스템 우선, 구 시스템 fallback)
     if (typeof window !== "undefined") {
-      const id = localStorage.getItem("instructor_id");
-      const token = localStorage.getItem("instructor_token");
+      // 새 인증 시스템 확인
+      const { isAuthenticated, getUser, getToken } = require("../../../../../lib/auth");
+      const token = getToken();
+      const user = getUser();
       
-      if (!id || !token) {
-        router.push("/instructor/login");
+      if (token && isAuthenticated() && user?.role === "instructor") {
+        setInstructorId(user.id);
+        if (courseId) {
+          fetchChapters();
+        }
         return;
       }
       
-      setInstructorId(id);
-      if (courseId) {
-        fetchChapters();
+      // 구 시스템 fallback
+      const oldId = localStorage.getItem("instructor_id");
+      const oldToken = localStorage.getItem("instructor_token");
+      
+      if (oldId && oldToken) {
+        setInstructorId(oldId);
+        if (courseId) {
+          fetchChapters();
+        }
+        return;
       }
+      
+      // 인증되지 않은 경우 홈으로 이동
+      router.push("/");
     }
   }, [courseId, router]);
 
@@ -96,7 +111,14 @@ export default function InstructorChaptersPage() {
     }
 
     try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      // 새 인증 시스템 우선, 구 시스템 fallback
+      const { getToken, isAuthenticated } = require("../../../../../lib/auth");
+      let token = getToken();
+      
+      if (!token || !isAuthenticated()) {
+        token = typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null;
+      }
+      
       if (!token) {
         throw new Error("로그인이 필요합니다.");
       }

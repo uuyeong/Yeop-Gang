@@ -1037,10 +1037,14 @@ def _fallback_process_course_assets(
                 logger.info(f"Full text stored to vector DB ({len(text_chunks)} chunk(s))")
                 
                 # 페르소나 프롬프트 생성 및 저장
+                # ⚠️ 강사 정보는 ChromaDB에 저장하지 않음 (DB에서 동적으로 로드)
                 logger.info("Generating persona prompt")
                 _update_progress(course_id, 85, "페르소나 프롬프트 생성 중")
                 persona_prompt = pipeline.generate_persona_prompt(
-                    course_id=course_id, sample_texts=texts
+                    course_id=course_id, 
+                    sample_texts=texts,
+                    instructor_info=None,  # ChromaDB에 저장하지 않음
+                    include_instructor_info=False  # 강사 정보는 DB에서 동적으로 로드
                 )
                 
                 persona_embeddings = embed_texts([persona_prompt], settings)
