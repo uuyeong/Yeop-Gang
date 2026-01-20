@@ -5,12 +5,15 @@
 - 멀티 테넌트 데이터 격리
 - 가드레일 적용
 """
+import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from fastapi.params import Form, File
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from ai.pipelines.rag import RAGPipeline
 from api.dh_schemas import (
@@ -327,137 +330,220 @@ async def instructor_upload(
     session: Session = Depends(get_session),
 ) -> UploadResponse:
     """강사용 파일 업로드 (권한 체크 포함) - 비디오와 오디오를 동시에 업로드 가능"""
-    # 권한 확인: 자신의 강의만 업로드 가능
-    if current_user["id"] != instructor_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only upload courses for yourself",
-        )
-    
-    # Instructor/Course 확인 및 이름 업데이트
-    instructor = session.get(Instructor, instructor_id)
-    if not instructor:
-        instructor = Instructor(
-            id=instructor_id,
-            name=instructor_name.strip() if instructor_name and instructor_name.strip() else None,
-        )
-        session.add(instructor)
-    else:
-        # 기존 강사가 있으면 이름 업데이트 (제공된 경우)
-        if instructor_name and instructor_name.strip():
-            instructor.name = instructor_name.strip()
-    
-    # 챕터인 경우 부모 강의 확인
-    if parent_course_id:
-        parent_course = session.get(Course, parent_course_id)
-        if not parent_course:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"부모 강의를 찾을 수 없습니다: {parent_course_id}"
-            )
-        if parent_course.instructor_id != instructor_id:
+    try:
+        logger.info(f"📤 업로드 요청 시작 - instructor_id: {instructor_id}, course_id: {course_id}")
+        logger.info(f"📤 파일 정보 - video: {video.filename if video else None}, audio: {audio.filename if audio else None}, pdf: {pdf.filename if pdf else None}, smi: {smi.filename if smi else None}")
+        
+        # 권한 확인: 자신의 강의만 업로드 가능
+        if current_user["id"] != instructor_id:
+            logger.warning(f"❌ 권한 오류 - current_user: {current_user['id']}, instructor_id: {instructor_id}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="부모 강의가 다른 강사에게 속해 있습니다",
+                detail="You can only upload courses for yourself",
             )
-    
-    course = session.get(Course, course_id)
-    if not course:
-        # Course 생성 시 is_public 컬럼이 있으면 기본값 설정
-        from sqlalchemy import inspect, text
-        try:
-            inspector = inspect(engine)
-            if "course" in inspector.get_table_names():
-                columns = [col["name"] for col in inspector.get_columns("course")]
-                has_is_public = "is_public" in columns
-            else:
-                has_is_public = False
-        except Exception:
-            has_is_public = False
         
-        if has_is_public:
-            # is_public 컬럼이 있으면 SQL로 직접 INSERT
-            from datetime import datetime
-            session.execute(
-                text("""
-                    INSERT INTO course 
-                    (id, instructor_id, title, category, parent_course_id, chapter_number, status, progress, created_at, updated_at, is_public)
-                    VALUES 
-                    (:id, :instructor_id, :title, :category, :parent_course_id, :chapter_number, :status, :progress, :created_at, :updated_at, 1)
-                """),
-                {
-                    "id": course_id,
-                    "instructor_id": instructor_id,
-                    "title": course_title.strip() if course_title.strip() else course_id,
-                    "category": course_category.strip() if course_category and course_category.strip() else None,
-                    "parent_course_id": parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
-                    "chapter_number": chapter_number,
-                    "status": CourseStatus.processing.value,
-                    "progress": 0,
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow(),
-                }
+        # Instructor/Course 확인 및 이름 업데이트
+        logger.info(f"🔍 강사 정보 확인 중 - instructor_id: {instructor_id}")
+        instructor = session.get(Instructor, instructor_id)
+        if not instructor:
+            logger.info(f"➕ 새 강사 생성 - instructor_id: {instructor_id}")
+            instructor = Instructor(
+                id=instructor_id,
+                name=instructor_name.strip() if instructor_name and instructor_name.strip() else None,
             )
-            session.flush()
-            course = session.get(Course, course_id)
+            session.add(instructor)
         else:
-            # is_public 컬럼이 없으면 일반 방식으로 생성
-            course = Course(
-                id=course_id,
-                instructor_id=instructor_id,
-                title=course_title.strip() if course_title.strip() else course_id,
-                category=course_category.strip() if course_category and course_category.strip() else None,
-                parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
-                chapter_number=chapter_number,
+            # 기존 강사가 있으면 이름 업데이트 (제공된 경우)
+            if instructor_name and instructor_name.strip():
+                logger.info(f"✏️ 강사 이름 업데이트 - {instructor.name} -> {instructor_name.strip()}")
+                instructor.name = instructor_name.strip()
+        
+        # 챕터인 경우 부모 강의 확인
+        if parent_course_id:
+            logger.info(f"🔍 부모 강의 확인 중 - parent_course_id: {parent_course_id}")
+            parent_course = session.get(Course, parent_course_id)
+            if not parent_course:
+                logger.error(f"❌ 부모 강의를 찾을 수 없음 - parent_course_id: {parent_course_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"부모 강의를 찾을 수 없습니다: {parent_course_id}"
+                )
+            if parent_course.instructor_id != instructor_id:
+                logger.error(f"❌ 부모 강의 권한 오류 - parent_course.instructor_id: {parent_course.instructor_id}, instructor_id: {instructor_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="부모 강의가 다른 강사에게 속해 있습니다",
+                )
+        
+        logger.info(f"🔍 강의 정보 확인 중 - course_id: {course_id}")
+        course = session.get(Course, course_id)
+        if not course:
+            logger.info(f"➕ 새 강의 생성 중 - course_id: {course_id}")
+            # Course 생성 시 is_public 컬럼이 있으면 기본값 설정
+            from sqlalchemy import inspect, text
+            try:
+                inspector = inspect(engine)
+                if "course" in inspector.get_table_names():
+                    columns = [col["name"] for col in inspector.get_columns("course")]
+                    has_is_public = "is_public" in columns
+                else:
+                    has_is_public = False
+            except Exception as e:
+                logger.warning(f"⚠️ 테이블 컬럼 확인 중 오류: {e}")
+                has_is_public = False
+            
+            if has_is_public:
+                # is_public 컬럼이 있으면 SQL로 직접 INSERT
+                from datetime import datetime
+                logger.info(f"💾 SQL로 강의 생성 (is_public 컬럼 포함)")
+                try:
+                    session.execute(
+                        text("""
+                            INSERT INTO course 
+                            (id, instructor_id, title, category, parent_course_id, chapter_number, status, progress, created_at, updated_at, is_public)
+                            VALUES 
+                            (:id, :instructor_id, :title, :category, :parent_course_id, :chapter_number, :status, :progress, :created_at, :updated_at, 1)
+                        """),
+                        {
+                            "id": course_id,
+                            "instructor_id": instructor_id,
+                            "title": course_title.strip() if course_title.strip() else course_id,
+                            "category": course_category.strip() if course_category and course_category.strip() else None,
+                            "parent_course_id": parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
+                            "chapter_number": chapter_number,
+                            "status": CourseStatus.processing.value,
+                            "progress": 0,
+                            "created_at": datetime.utcnow(),
+                            "updated_at": datetime.utcnow(),
+                        }
+                    )
+                    session.flush()
+                    course = session.get(Course, course_id)
+                    logger.info(f"✅ 강의 생성 완료 (SQL) - course_id: {course_id}")
+                except Exception as e:
+                    logger.error(f"❌ SQL로 강의 생성 실패: {e}", exc_info=True)
+                    raise
+            else:
+                # is_public 컬럼이 없으면 일반 방식으로 생성
+                logger.info(f"💾 일반 방식으로 강의 생성")
+                try:
+                    course = Course(
+                        id=course_id,
+                        instructor_id=instructor_id,
+                        title=course_title.strip() if course_title.strip() else course_id,
+                        category=course_category.strip() if course_category and course_category.strip() else None,
+                        parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
+                        chapter_number=chapter_number,
+                    )
+                    session.add(course)
+                    logger.info(f"✅ 강의 생성 완료 (일반) - course_id: {course_id}")
+                except Exception as e:
+                    logger.error(f"❌ 강의 생성 실패: {e}", exc_info=True)
+                    raise
+        elif course.instructor_id != instructor_id:
+            logger.error(f"❌ 강의 권한 오류 - course.instructor_id: {course.instructor_id}, instructor_id: {instructor_id}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Course belongs to another instructor",
             )
-            session.add(course)
-    elif course.instructor_id != instructor_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Course belongs to another instructor",
+        else:
+            # 기존 강의가 있으면 제목 및 카테고리 업데이트
+            logger.info(f"✏️ 기존 강의 정보 업데이트 - course_id: {course_id}")
+            if course_title and course_title.strip():
+                course.title = course_title.strip()
+            elif not course.title:  # 제목이 없으면 course_id 사용
+                course.title = course_id
+            if course_category and course_category.strip():
+                course.category = course_category.strip()
+            if parent_course_id and parent_course_id.strip():
+                course.parent_course_id = parent_course_id.strip()
+            if chapter_number is not None:
+                course.chapter_number = chapter_number
+        
+        course.status = CourseStatus.processing
+        course.error_message = None
+        logger.info(f"💾 강의 상태 업데이트 - course_id: {course_id}, status: {course.status.value}")
+        try:
+            session.commit()
+            logger.info(f"✅ DB 커밋 완료 - course_id: {course_id}")
+        except Exception as e:
+            logger.error(f"❌ DB 커밋 실패: {e}", exc_info=True)
+            session.rollback()
+            raise
+        
+        # 파일 저장
+        logger.info(f"💾 파일 저장 시작 - course_id: {course_id}")
+        try:
+            paths = save_course_assets(
+                instructor_id=instructor_id,
+                course_id=course_id,
+                video=video,
+                audio=audio,
+                pdf=pdf,
+                smi=smi,
+            )
+            logger.info(f"✅ 파일 저장 완료 - paths: {paths}")
+        except Exception as e:
+            logger.error(f"❌ 파일 저장 실패: {e}", exc_info=True)
+            # 파일 저장 실패 시 강의 상태를 failed로 변경
+            course.status = CourseStatus.failed
+            course.error_message = f"파일 저장 실패: {str(e)}"
+            session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"파일 저장 중 오류가 발생했습니다: {str(e)}"
+            )
+        
+        # 백그라운드 작업 등록 (백엔드 A processor 호출)
+        logger.info(f"🔄 백그라운드 작업 등록 시작 - course_id: {course_id}")
+        try:
+            enqueue_processing_task(
+                background_tasks,
+                course_id=course_id,
+                instructor_id=instructor_id,
+                video_path=paths.get("video"),
+                audio_path=paths.get("audio"),
+                pdf_path=paths.get("pdf"),
+                smi_path=paths.get("smi"),
+            )
+            logger.info(f"✅ 백그라운드 작업 등록 완료 - course_id: {course_id}")
+        except Exception as e:
+            logger.error(f"❌ 백그라운드 작업 등록 실패: {e}", exc_info=True)
+            # 백그라운드 작업 등록 실패 시 강의 상태를 failed로 변경
+            course.status = CourseStatus.failed
+            course.error_message = f"백그라운드 작업 등록 실패: {str(e)}"
+            session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"백그라운드 작업 등록 중 오류가 발생했습니다: {str(e)}"
+            )
+        
+        logger.info(f"✅ 업로드 요청 완료 - course_id: {course_id}, instructor_id: {instructor_id}")
+        return UploadResponse(
+            course_id=course_id,
+            instructor_id=instructor_id,
+            status=course.status.value,
         )
-    else:
-        # 기존 강의가 있으면 제목 및 카테고리 업데이트
-        if course_title and course_title.strip():
-            course.title = course_title.strip()
-        elif not course.title:  # 제목이 없으면 course_id 사용
-            course.title = course_id
-        if course_category and course_category.strip():
-            course.category = course_category.strip()
-        if parent_course_id and parent_course_id.strip():
-            course.parent_course_id = parent_course_id.strip()
-        if chapter_number is not None:
-            course.chapter_number = chapter_number
-    
-    course.status = CourseStatus.processing
-    session.commit()
-    
-    # 파일 저장
-    paths = save_course_assets(
-        instructor_id=instructor_id,
-        course_id=course_id,
-        video=video,
-        audio=audio,
-        pdf=pdf,
-        smi=smi,
-    )
-    
-    # 백그라운드 작업 등록 (백엔드 A processor 호출)
-    enqueue_processing_task(
-        background_tasks,
-        course_id=course_id,
-        instructor_id=instructor_id,
-        video_path=paths.get("video"),
-        audio_path=paths.get("audio"),
-        pdf_path=paths.get("pdf"),
-        smi_path=paths.get("smi"),
-    )
-    
-    return UploadResponse(
-        course_id=course_id,
-        instructor_id=instructor_id,
-        status=course.status.value,
-    )
+    except HTTPException:
+        # HTTPException은 그대로 전달
+        raise
+    except Exception as e:
+        # 예상치 못한 오류
+        logger.error(f"❌ 업로드 중 예상치 못한 오류 발생: {e}", exc_info=True)
+        # 강의 상태를 failed로 변경 시도
+        try:
+            course = session.get(Course, course_id)
+            if course:
+                course.status = CourseStatus.failed
+                course.error_message = f"업로드 중 오류 발생: {str(e)}"
+                session.commit()
+        except Exception as commit_error:
+            logger.error(f"❌ 강의 상태 업데이트 실패: {commit_error}", exc_info=True)
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"업로드 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.get("/instructor/courses", response_model=list[dict])

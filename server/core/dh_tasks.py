@@ -171,6 +171,7 @@ def process_course_assets_wrapper(
                     course = session.get(Course, course_id)
                     if course:
                         course.status = CourseStatus.completed
+                        course.error_message = None
                         course.progress = 100
                         session.commit()
                     
@@ -200,6 +201,7 @@ def process_course_assets_wrapper(
                     course = session.get(Course, course_id)
                     if course:
                         course.status = CourseStatus.failed
+                        course.error_message = error_msg
                         session.commit()
                         
         except ImportError:
@@ -217,16 +219,16 @@ def process_course_assets_wrapper(
                 smi_path=smi_path,
             )
     except Exception as e:
-        logger.error(f"Error processing course {course_id}: {e}", exc_info=True)
-        _update_progress(course_id, 0, f"오류 발생: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error processing course {course_id}: {error_msg}", exc_info=True)
+        _update_progress(course_id, 0, f"오류 발생: {error_msg}")
         # DB에 실패 상태 저장
         
         with Session(engine) as session:
             course = session.get(Course, course_id)
             if course:
                 course.status = CourseStatus.failed
-                # 에러 메시지를 progress 필드나 다른 방법으로 저장할 수 있지만,
-                # 일단 로그에 남기고 상태만 저장
+                course.error_message = error_msg
                 session.commit()
                 logger.error(f"Course {course_id} marked as failed. Error: {error_msg}")
 
@@ -274,20 +276,62 @@ def _fallback_process_course_assets(
     from ai.pipelines.rag import RAGPipeline
     from ai.services.stt import transcribe_video
     
-    settings = AISettings()
-    pipeline = RAGPipeline(settings)
-    
-    with Session(engine) as session:
-        course = session.get(Course, course_id)
-        if not course:
-            course = Course(id=course_id, instructor_id=instructor_id)
-            session.add(course)
-        course.status = CourseStatus.processing
-        course.progress = 0
-        session.commit()
+    try:
+        # 파일 존재 여부 확인
+        if video_path:
+            video_path = Path(video_path).resolve()
+            if not video_path.exists():
+                error_msg = f"비디오 파일을 찾을 수 없습니다: {video_path}"
+                logger.error(f"❌ {error_msg}")
+                raise FileNotFoundError(error_msg)
         
-        logger.info(f"Starting processing for course {course_id}")
-        texts: list[str] = []
+        if audio_path:
+            audio_path = Path(audio_path).resolve()
+            if not audio_path.exists():
+                error_msg = f"오디오 파일을 찾을 수 없습니다: {audio_path}"
+                logger.error(f"❌ {error_msg}")
+                raise FileNotFoundError(error_msg)
+        
+        if pdf_path:
+            pdf_path = Path(pdf_path).resolve()
+            if not pdf_path.exists():
+                error_msg = f"PDF 파일을 찾을 수 없습니다: {pdf_path}"
+                logger.error(f"❌ {error_msg}")
+                raise FileNotFoundError(error_msg)
+        
+        if smi_path:
+            smi_path = Path(smi_path).resolve()
+            if not smi_path.exists():
+                error_msg = f"SMI 파일을 찾을 수 없습니다: {smi_path}"
+                logger.error(f"❌ {error_msg}")
+                raise FileNotFoundError(error_msg)
+        
+        # 처리할 파일이 있는지 확인
+        if not video_path and not audio_path and not pdf_path and not smi_path:
+            error_msg = "처리할 파일이 없습니다. 비디오, 오디오, PDF 또는 SMI 파일을 업로드해주세요."
+            logger.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+        
+        settings = AISettings()
+        
+        # OPENAI_API_KEY 확인 (STT는 로컬 Whisper 사용하므로 필수는 아니지만, 페르소나 생성에는 필요)
+        if not settings.openai_api_key:
+            logger.warning("⚠️ OPENAI_API_KEY가 설정되지 않았습니다. 페르소나 생성이 실패할 수 있습니다.")
+        
+        pipeline = RAGPipeline(settings)
+        
+        with Session(engine) as session:
+            course = session.get(Course, course_id)
+            if not course:
+                course = Course(id=course_id, instructor_id=instructor_id)
+                session.add(course)
+            course.status = CourseStatus.processing
+            course.progress = 0
+            course.error_message = None
+            session.commit()
+            
+            logger.info(f"Starting processing for course {course_id}")
+            texts: list[str] = []
         
         # SMI 자막 파일이 있으면 STT 건너뛰고 SMI 파싱
         if smi_path:
@@ -352,10 +396,18 @@ def _fallback_process_course_assets(
                     _update_progress(course_id, 60, "자막 세그먼트 임베딩 완료")
                 
             except Exception as e:
-                logger.error(f"❌ SMI parsing failed: {e}")
+                error_msg = f"SMI 파일 파싱 실패: {str(e)}"
+                logger.error(f"❌ {error_msg}")
                 import traceback
                 logger.error(traceback.format_exc())
-                raise
+                # DB에 실패 상태 저장
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.error_message = error_msg
+                        session.commit()
+                raise Exception(error_msg)
         
         # 오디오 파일 우선 처리 (MP3 등), 없으면 비디오 처리
         elif audio_path:
@@ -503,18 +555,28 @@ def _fallback_process_course_assets(
             except (FileNotFoundError, ValueError) as e:
                 error_msg = f"오디오 STT 처리 오류 ({audio_path.name if audio_path else 'unknown'}): {str(e)}"
                 logger.error(f"❌ {error_msg}")
-                course.status = CourseStatus.failed
-                course.progress = 0
-                session.commit()
+                import traceback
+                logger.error(traceback.format_exc())
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.progress = 0
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
             except Exception as e:
                 error_msg = f"오디오 처리 중 예상치 못한 오류: {str(e)}"
                 logger.error(f"❌ {error_msg}")
                 import traceback
                 logger.error(traceback.format_exc())
-                course.status = CourseStatus.failed
-                course.progress = 0
-                session.commit()
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.progress = 0
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
         
         # 비디오 처리 (STT) - 오디오 파일이 없을 때만
@@ -689,20 +751,32 @@ def _fallback_process_course_assets(
             except FileNotFoundError as e:
                 error_msg = f"파일을 찾을 수 없습니다: {e}"
                 logger.error(f"Video processing error: {error_msg}", exc_info=True)
-                course.status = CourseStatus.failed
-                session.commit()
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
             except ValueError as e:
                 error_msg = str(e)
                 logger.error(f"Video processing error: {error_msg}", exc_info=True)
-                course.status = CourseStatus.failed
-                session.commit()
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
             except Exception as e:
                 error_msg = f"비디오 처리 중 오류 발생: {str(e)}"
                 logger.error(f"Video processing error: {error_msg}", exc_info=True)
-                course.status = CourseStatus.failed
-                session.commit()
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
         
         # 오디오 처리 (STT)
@@ -985,25 +1059,64 @@ def _fallback_process_course_assets(
             except ValueError as e:
                 error_msg = str(e)
                 logger.error(f"Vector DB ingestion error: {error_msg}", exc_info=True)
-                course.status = CourseStatus.failed
-                session.commit()
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
             except Exception as e:
                 error_msg = f"벡터 DB 저장 중 오류 발생: {str(e)}"
                 logger.error(f"Vector DB ingestion error: {error_msg}", exc_info=True)
-                course.status = CourseStatus.failed
-                course.progress = 0
-                session.commit()
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course.status = CourseStatus.failed
+                        course.progress = 0
+                        course.error_message = error_msg
+                        session.commit()
                 raise Exception(error_msg)
         else:
             logger.warning(f"⚠️ No texts to embed. STT may have failed or returned empty text.")
         
         # 처리 완료 (texts가 없어도 STT가 완료되었으면 완료로 표시)
-        course = session.get(Course, course_id)
-        if course:
-            course.status = CourseStatus.completed
-            course.progress = 100
-            course.updated_at = datetime.utcnow()
-            session.commit()
-            logger.info(f"✅ Course {course_id} processing completed successfully (progress: 100%)")
+        with Session(engine) as session:
+            course = session.get(Course, course_id)
+            if course:
+                course.status = CourseStatus.completed
+                course.progress = 100
+                course.error_message = None
+                course.updated_at = datetime.utcnow()
+                session.commit()
+                logger.info(f"✅ Course {course_id} processing completed successfully (progress: 100%)")
+    except FileNotFoundError as e:
+        error_msg = f"파일을 찾을 수 없습니다: {str(e)}"
+        logger.error(f"❌ {error_msg}", exc_info=True)
+        with Session(engine) as session:
+            course = session.get(Course, course_id)
+            if course:
+                course.status = CourseStatus.failed
+                course.error_message = error_msg
+                session.commit()
+    except ValueError as e:
+        error_msg = f"처리 오류: {str(e)}"
+        logger.error(f"❌ {error_msg}", exc_info=True)
+        with Session(engine) as session:
+            course = session.get(Course, course_id)
+            if course:
+                course.status = CourseStatus.failed
+                course.error_message = error_msg
+                session.commit()
+    except Exception as e:
+        error_msg = f"처리 중 예상치 못한 오류 발생: {str(e)}"
+        logger.error(f"❌ {error_msg}", exc_info=True)
+        import traceback
+        logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        with Session(engine) as session:
+            course = session.get(Course, course_id)
+            if course:
+                course.status = CourseStatus.failed
+                course.error_message = error_msg
+                session.commit()
 

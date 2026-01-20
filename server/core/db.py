@@ -129,6 +129,11 @@ def _migrate_add_course_columns() -> None:
         if "persona_profile" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE course ADD COLUMN persona_profile TEXT"))
+
+        # error_message 컬럼 추가 (실패 상세 메시지 저장용)
+        if "error_message" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN error_message TEXT"))
         
         # is_public 컬럼이 NOT NULL로 되어 있으면 기존 데이터에 기본값 설정
         if "is_public" in columns:

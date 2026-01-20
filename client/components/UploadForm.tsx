@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Upload, FileVideo, FileAudio, FileText, X, CheckCircle2, AlertCircle } from "lucide-react";
 import ProgressBar from "./ProgressBar";
-import { API_BASE_URL, apiGet, apiUpload, handleApiError } from "../lib/api";
+import { API_BASE_URL, apiGet, apiUpload, handleApiError, type ApiError } from "../lib/api";
 import { getToken } from "../lib/auth";
 
 type Props = {
@@ -195,8 +195,11 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
     } catch (err) {
       console.error("업로드 오류:", err);
       
-      const apiError = handleApiError(err);
-      const errorMessage = apiError.message;
+      const fallbackError = handleApiError(err);
+      const errorMessage =
+        (err && typeof (err as ApiError).message === "string"
+          ? (err as ApiError).message
+          : fallbackError.message) ?? "알 수 없는 오류가 발생했습니다.";
       
       setUploadError(errorMessage);
       setStatus(`업로드 실패: ${errorMessage}`);

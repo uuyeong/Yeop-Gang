@@ -501,6 +501,7 @@ async def upload_course_assets(
         course = Course(id=course_id, instructor_id=instructor_id)
         session.add(course)
     course.status = CourseStatus.processing
+    course.error_message = None
     session.commit()
 
     paths = save_course_assets(
@@ -538,7 +539,7 @@ def status(course_id: str, session: Session = Depends(get_session)) -> StatusRes
     # 실패 상태일 때 도움말 메시지 추가
     message = None
     if course.status == CourseStatus.failed:
-        message = "서버 로그를 확인하세요. 일반적인 원인: OPENAI_API_KEY 미설정, 파일 형식 오류, 네트워크 문제"
+        message = course.error_message or "서버 로그를 확인하세요. 일반적인 원인: OPENAI_API_KEY 미설정, 파일 형식 오류, 네트워크 문제"
     
     return StatusResponse(
         course_id=course_id,
