@@ -503,23 +503,105 @@ def process_course_assets(
                 print(error_msg)
                 # 오류가 발생해도 계속 진행
         
-        # 3. Style Analyzer 실행 (초반 5분 분석) 및 페르소나 추출
+        # 3. Style Analyzer 실행 (강의 목록 단위 말투 관리)
+        # - 부모 강의(parent_course_id가 null)에 persona_profile 저장
+        # - 챕터(parent_course_id가 있음)는 부모 강의의 persona_profile 재사용
         persona_profile_json = None
         if segments and len(segments) > 0:
             if update_progress:
                 update_progress(75, "강사 스타일 분석 중...")
-            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 5분 분석)...")
+            
+            # 현재 course가 챕터인지 부모 강의인지 확인
+            parent_course_id = None
+            is_chapter = False
             try:
-                persona_profile = analyze_instructor_style(segments, settings=settings)
-                persona_profile_json = json.dumps(persona_profile, ensure_ascii=False)
-                print(f"[{course_id}] ✅ Style Analyzer 완료: {persona_profile_json[:100]}...")
+                from core.db import engine
+                from sqlmodel import Session
+                from core.models import Course
                 
-                # persona_profile은 반환값에 포함하여 backB가 DB에 저장하도록 함
-                
-            except Exception as e:
-                error_msg = f"[{course_id}] ❌ Style Analyzer 오류: {str(e)}"
-                print(error_msg)
-                # Style Analyzer 실패해도 계속 진행
+                with Session(engine) as db_session:
+                    current_course = db_session.get(Course, course_id)
+                    if current_course:
+                        parent_course_id = current_course.parent_course_id
+                        is_chapter = parent_course_id is not None
+                        if is_chapter:
+                            print(f"[{course_id}] 📚 챕터 감지됨 (부모 강의: {parent_course_id})")
+                        else:
+                            print(f"[{course_id}] 📖 부모 강의 감지됨")
+            except Exception as db_e:
+                print(f"[{course_id}] ⚠️ Course 정보 확인 실패: {db_e}")
+                # DB 조회 실패해도 계속 진행
+            
+            # 챕터인 경우: 부모 강의의 persona_profile 재사용
+            if is_chapter and parent_course_id:
+                try:
+                    from core.db import engine
+                    from sqlmodel import Session
+                    from core.models import Course
+                    
+                    with Session(engine) as db_session:
+                        parent_course = db_session.get(Course, parent_course_id)
+                        if parent_course and parent_course.persona_profile:
+                            persona_profile_json = parent_course.persona_profile
+                            print(f"[{course_id}] ✅ 부모 강의 말투 발견 (재사용): {parent_course_id}")
+                            print(f"[{course_id}] ♻️ 부모 강의 말투 재사용 (API 호출 생략)")
+                        else:
+                            print(f"[{course_id}] ⚠️ 부모 강의({parent_course_id})의 말투가 없습니다. 새로 분석합니다.")
+                            # 부모 강의 말투가 없으면 새로 분석 (부모 강의에 저장)
+                            is_chapter = False  # 부모 강의처럼 처리
+                            parent_course_id = None
+                except Exception as db_e:
+                    print(f"[{course_id}] ⚠️ 부모 강의 말투 확인 실패: {db_e}")
+                    # 부모 강의 말투 확인 실패 시 새로 분석
+                    is_chapter = False
+                    parent_course_id = None
+            
+            # 부모 강의인 경우 (또는 부모 강의 말투가 없는 챕터): 부모 강의의 persona_profile 확인
+            if not is_chapter:
+                target_course_id = course_id  # 부모 강의 ID 사용
+                try:
+                    from core.db import engine
+                    from sqlmodel import Session
+                    from core.models import Course
+                    
+                    with Session(engine) as db_session:
+                        target_course = db_session.get(Course, target_course_id)
+                        if target_course and target_course.persona_profile:
+                            # 부모 강의 말투가 이미 있으면 재사용
+                            persona_profile_json = target_course.persona_profile
+                            print(f"[{course_id}] ✅ 부모 강의 말투 발견 (재사용): {target_course_id}")
+                            print(f"[{course_id}] ♻️ 부모 강의 말투 재사용 (API 호출 생략)")
+                        else:
+                            # 부모 강의 말투가 없으면 새로 분석
+                            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 5분 분석)...")
+                            try:
+                                persona_profile = analyze_instructor_style(segments, settings=settings)
+                                persona_profile_json = json.dumps(persona_profile, ensure_ascii=False)
+                                print(f"[{course_id}] ✅ Style Analyzer 완료: {persona_profile_json[:100]}...")
+                                
+                                # 부모 강의의 persona_profile에 저장
+                                try:
+                                    with Session(engine) as db_session:
+                                        target_course = db_session.get(Course, target_course_id)
+                                        if target_course:
+                                            target_course.persona_profile = persona_profile_json
+                                            db_session.add(target_course)
+                                            db_session.commit()
+                                            db_session.refresh(target_course)
+                                            print(f"[{course_id}] ✅ 부모 강의 말투를 Course DB에 저장 완료 (course_id: {target_course_id})")
+                                        else:
+                                            print(f"[{course_id}] ⚠️ 부모 강의({target_course_id})를 찾을 수 없어 말투를 저장하지 못했습니다.")
+                                except Exception as db_e:
+                                    print(f"[{course_id}] ⚠️ 부모 강의 말투 DB 저장 실패: {db_e}")
+                                    # DB 저장 실패해도 계속 진행
+                                
+                            except Exception as e:
+                                error_msg = f"[{course_id}] ❌ Style Analyzer 오류: {str(e)}"
+                                print(error_msg)
+                                # Style Analyzer 실패해도 계속 진행
+                except Exception as db_e:
+                    print(f"[{course_id}] ⚠️ 부모 강의 말투 확인 실패: {db_e}")
+                    # DB 조회 실패해도 계속 진행
         
         # 4. 페르소나 프롬프트 생성 및 RAG 인제스트
         if texts:
