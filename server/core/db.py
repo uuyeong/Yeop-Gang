@@ -129,6 +129,11 @@ def _migrate_add_course_columns() -> None:
         if "persona_profile" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE course ADD COLUMN persona_profile TEXT"))
+
+        # error_message 컬럼 추가 (실패 상세 메시지 저장용)
+        if "error_message" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE course ADD COLUMN error_message TEXT"))
         
         # is_public 컬럼이 NOT NULL로 되어 있으면 기존 데이터에 기본값 설정
         if "is_public" in columns:
@@ -207,8 +212,33 @@ def _migrate_add_instructor_profile_columns() -> None:
         logger.debug(f"Instructor profile columns migration: {e}")
 
 
+def _migrate_ensure_course_indexes() -> None:
+    """강의 목록(course) 조회 성능을 위한 인덱스 추가 (SQLite)"""
+    try:
+        from sqlalchemy import inspect, text
+
+        if engine.dialect.name != "sqlite":
+            return
+        inspector = inspect(engine)
+        if "course" not in inspector.get_table_names():
+            return
+
+        # (instructor_id, parent_course_id) 복합 인덱스: 강사별 강의 목록, 메인 강의만 조회 시 사용
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_course_instructor_parent ON course(instructor_id, parent_course_id)"
+            ))
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"Course indexes migration: {e}")
+
+
 def init_db() -> None:
-    """Create tables if they do not exist."""
+    """Create tables if they do not exist. 강의 목록(course) 테이블 포함."""
+    # 강의 목록(course) 등 모든 테이블이 SQLModel.metadata에 등록되도록 모델 import
+    from core.models import Instructor, Course, Video, ChatSession  # noqa: F401
+    from core.dh_models import Student, CourseEnrollment  # noqa: F401
+
     # 데이터베이스 파일 경로 출력
     db_url = settings.database_url
     if db_url.startswith("sqlite"):
@@ -244,6 +274,8 @@ def init_db() -> None:
     _migrate_add_course_columns()
     # Instructor 테이블에 프로필 컬럼 추가 (마이그레이션)
     _migrate_add_instructor_profile_columns()
+    # 강의 목록(course) 조회용 인덱스 (SQLite)
+    _migrate_ensure_course_indexes()
 
 
 def get_session() -> Generator[Session, None, None]:

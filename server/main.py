@@ -2,9 +2,29 @@
 from pathlib import Path
 import os
 import shutil
+import logging
 
 # ChromaDB telemetry 비활성화 (가장 먼저 설정 - ChromaDB 모듈 import 전)
 os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
+
+# 로깅 설정 (uvicorn과 호환되도록 조건부 설정)
+# uvicorn이 이미 로깅을 설정했는지 확인하고, 설정되지 않았을 때만 basicConfig 호출
+if not logging.root.handlers:
+    try:
+        # Python 3.8+에서는 force=True 사용 가능
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            force=True
+        )
+    except TypeError:
+        # Python 3.7 이하에서는 force 파라미터가 없음
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -63,6 +83,10 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:
+        # 로깅 설정 확인
+        logger = logging.getLogger(__name__)
+        logger.info("🚀 서버 시작 중...")
+        
         # 디버깅: API 키 로드 확인
         from ai.config import AISettings
         settings = AISettings()
@@ -110,6 +134,8 @@ def create_app() -> FastAPI:
         from core.models import Instructor, Course, Video, ChatSession
         from core.dh_models import Student, CourseEnrollment
         init_db()
+        
+        logger.info("✅ 서버 시작 완료")
 
     return app
 

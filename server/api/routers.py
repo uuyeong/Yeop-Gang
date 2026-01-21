@@ -30,6 +30,7 @@ from api.schemas import (
 )
 from datetime import datetime
 from core.db import get_session
+from core.dh_models import CourseEnrollment
 from core.models import Course, CourseStatus, Instructor, Video
 from core.storage import save_course_assets
 from core.tasks import enqueue_processing_task
@@ -703,59 +704,63 @@ def get_course_chapters(
 def delete_course(course_id: str, session: Session = Depends(get_session)) -> dict:
     """
     강의 삭제 (DB, 벡터 DB, 업로드 파일 모두 삭제)
+    - 자식 챕터(강의) 캐스케이드 삭제
+    - CourseEnrollment(수강 등록) DB 삭제
     """
     from pathlib import Path
     import shutil
     from core.config import AppSettings
     from ai.config import AISettings
     from ai.services.vectorstore import get_chroma_client, get_collection
-    
+    from core.models import ChatSession
+
     # 1. DB에서 강의 확인
     course = session.get(Course, course_id)
     if not course:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"강의를 찾을 수 없습니다: {course_id}")
-    
+
     instructor_id = course.instructor_id
-    
-    # 2. 관련 데이터 삭제 (Video, ChatSession)
-    videos = session.exec(select(Video).where(Video.course_id == course_id)).all()
-    for video in videos:
-        session.delete(video)
-    
-    from core.models import ChatSession
-    sessions = session.exec(select(ChatSession).where(ChatSession.course_id == course_id)).all()
-    for sess in sessions:
-        session.delete(sess)
-    
-    # 3. 강의 삭제
-    session.delete(course)
+
+    # 2. 삭제 대상: 자식 챕터 먼저, 그 다음 부모 (FK 참조 때문에 순서 유지)
+    chapters = session.exec(select(Course).where(Course.parent_course_id == course_id)).all()
+    course_ids_to_delete = [ch.id for ch in chapters] + [course_id]
+
+    # 3. DB 삭제: 각 강의에 대해 Video, ChatSession, CourseEnrollment, Course
+    for cid in course_ids_to_delete:
+        for video in session.exec(select(Video).where(Video.course_id == cid)).all():
+            session.delete(video)
+        for sess in session.exec(select(ChatSession).where(ChatSession.course_id == cid)).all():
+            session.delete(sess)
+        for enr in session.exec(select(CourseEnrollment).where(CourseEnrollment.course_id == cid)).all():
+            session.delete(enr)
+        c = session.get(Course, cid)
+        if c:
+            session.delete(c)
     session.commit()
-    
-    # 4. 벡터 DB에서 강의 데이터 삭제
+
+    # 4. 벡터 DB에서 강의 데이터 삭제 (삭제한 모든 course_id)
     try:
         ai_settings = AISettings()
         client = get_chroma_client(ai_settings)
         collection = get_collection(client, ai_settings)
-        
-        # course_id로 필터링하여 삭제
-        results = collection.get(where={"course_id": course_id})
-        if results and results.get("ids"):
-            collection.delete(ids=results["ids"])
+        for cid in course_ids_to_delete:
+            results = collection.get(where={"course_id": cid})
+            if results and results.get("ids"):
+                collection.delete(ids=results["ids"])
     except Exception as e:
         print(f"벡터 DB 삭제 중 오류 (무시): {e}")
-    
-    # 5. 업로드 파일 삭제
+
+    # 5. 업로드 파일 삭제 (삭제한 모든 course_id)
     try:
         settings = AppSettings()
         uploads_dir = settings.uploads_dir
-        
-        course_dir = uploads_dir / instructor_id / course_id
-        if course_dir.exists():
-            shutil.rmtree(course_dir)
+        for cid in course_ids_to_delete:
+            course_dir = uploads_dir / instructor_id / cid
+            if course_dir.exists():
+                shutil.rmtree(course_dir)
     except Exception as e:
         print(f"파일 삭제 중 오류 (무시): {e}")
-    
+
     return {
         "message": f"강의 '{course_id}'가 삭제되었습니다.",
         "course_id": course_id,
@@ -783,6 +788,7 @@ async def upload_course_assets(
         course = Course(id=course_id, instructor_id=instructor_id)
         session.add(course)
     course.status = CourseStatus.processing
+    course.error_message = None
     session.commit()
 
     paths = save_course_assets(
@@ -820,7 +826,7 @@ def status(course_id: str, session: Session = Depends(get_session)) -> StatusRes
     # 실패 상태일 때 도움말 메시지 추가
     message = None
     if course.status == CourseStatus.failed:
-        message = "서버 로그를 확인하세요. 일반적인 원인: OPENAI_API_KEY 미설정, 파일 형식 오류, 네트워크 문제"
+        message = course.error_message or "서버 로그를 확인하세요. 일반적인 원인: OPENAI_API_KEY 미설정, 파일 형식 오류, 네트워크 문제"
     
     return StatusResponse(
         course_id=course_id,
