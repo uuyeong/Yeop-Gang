@@ -1,14 +1,16 @@
 # dh: 이 파일은 기존 호환성을 위해 유지됩니다.
 # dh: 새로운 보안 기능이 포함된 API는 server/api/dh_routers.py를 사용하세요.
 
-from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, Request, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, Request, HTTPException, Query
 from fastapi.params import Form, File
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlmodel import Session, select
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import os
 import re
+import time
+import hashlib
 
 from ai.pipelines.rag import RAGPipeline
 from api.schemas import (
@@ -37,6 +39,43 @@ from core.dh_auth import (
     create_access_token,
 )
 from ai.config import AISettings
+
+# 인사말 캐시 (API 비용 절감용)
+_greeting_cache: Dict[str, Tuple[float, str]] = {}
+_GREETING_CACHE_TTL_SECONDS = 300
+
+# 요약/퀴즈 캐시 (API 비용 절감용)
+_summary_cache: Dict[Tuple[str, str], Tuple[float, str, List[str]]] = {}
+_quiz_cache: Dict[Tuple[str, str, int], Tuple[float, List]] = {}
+_SUMMARY_CACHE_TTL_SECONDS = 300
+_QUIZ_CACHE_TTL_SECONDS = 300
+
+# transcript 캐시 (응답 속도 개선용)
+_transcript_cache: Dict[Tuple[str, bool], Tuple[float, object]] = {}
+_TRANSCRIPT_CACHE_TTL_SECONDS = 120
+
+# 캐시 히트 로그 (효과 측정용)
+_CACHE_LOG_ENABLED = True
+
+
+def _render_math_plain_text(text: str) -> str:
+    if not text:
+        return text
+
+    rendered = text
+    # LaTeX 블록 제거
+    rendered = rendered.replace("\\(", "").replace("\\)", "")
+    rendered = rendered.replace("\\[", "").replace("\\]", "")
+    rendered = rendered.replace("\\,", " ")
+    # 텍스트 매크로 처리
+    rendered = re.sub(r"\\text\{([^}]*)\}", r"\1", rendered)
+    # 분수/루트 처리
+    rendered = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r"\1 / \2", rendered)
+    rendered = re.sub(r"\\sqrt\{([^{}]+)\}", r"√(\1)", rendered)
+    # 곱셈 처리
+    rendered = rendered.replace("\\times", "x").replace("\\cdot", "x")
+
+    return rendered
 
 router = APIRouter(prefix="", tags=["api"])
 
@@ -257,14 +296,15 @@ def _generate_persona_response(
             max_tokens=500,
         )
         
-        return response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
+        raw_response = response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
+        return _render_math_plain_text(raw_response)
         
     except Exception as e:
         print(f"[PERSONA RESPONSE] ❌ 오류: {e}")
         import traceback
         print(f"[PERSONA RESPONSE] Traceback: {traceback.format_exc()}")
         # 오류 발생 시 기본 응답 (페르소나 없이)
-        return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
+        return _render_math_plain_text("죄송합니다. 답변을 생성하는 중 오류가 발생했습니다.")
 
 
 def _serve_video_file(file_path: Path, media_type: str):
@@ -1113,7 +1153,8 @@ def ask(
             conversation_id=conversation_id,
             course_id=payload.course_id,
         )
-    
+
+
     # 대화 히스토리 관련 질문
     history_question_keywords = [
         "방금 한 말", "방금 말한", "방금 말씀", "방금 한 말씀",
@@ -1217,11 +1258,20 @@ def ask(
                 course_id=payload.course_id,
             )
     
+    # 질문 유형 분석: PDF/강의자료 관련 질문인지 확인
+    question_lower_for_type = payload.question.lower().strip()
+    pdf_related_keywords = [
+        "pdf", "페이지", "page", "강의자료", "교재", "책", "자료",
+        "몇 페이지", "어느 페이지", "페이지 번호", "page number",
+        "그림", "도표", "도형", "그래프", "차트", "표", "이미지",
+        "그림 설명", "도표 설명", "도형 설명", "그래프 설명"
+    ]
+    is_pdf_question = any(keyword in question_lower_for_type for keyword in pdf_related_keywords)
+    
     # "이해가 안가요", "지금 말하는 부분", "방금 말씀" 같은 질문이면 해당 시간대 transcript 우선 사용
+    # 단, PDF 관련 질문이면 transcript를 우선하지 않음 (PDF를 찾아야 함)
     use_transcript_first = False
-    if payload.current_time is not None and payload.current_time > 0:
-        question_lower = payload.question.lower()
-        
+    if not is_pdf_question and payload.current_time is not None and payload.current_time > 0:
         # 시간/맥락 관련 키워드
         recent_keywords = [
             "방금", "지금", "현재", "이 부분", "여기", "지금 이", "방금 전",
@@ -1230,19 +1280,25 @@ def ask(
         # 이해 관련 키워드
         understanding_keywords = ["이해", "모르겠", "다시", "설명", "어려워", "어렵", "무엇", "뭐", "뭔지"]
         
-        has_recent_keyword = any(keyword in question_lower for keyword in recent_keywords)
-        has_understanding_keyword = any(kw in question_lower for kw in understanding_keywords)
+        has_recent_keyword = any(keyword in question_lower_for_type for keyword in recent_keywords)
+        has_understanding_keyword = any(kw in question_lower_for_type for kw in understanding_keywords)
         
         # 시간/맥락 키워드가 있거나, 이해 관련 키워드와 함께 현재 시간 정보가 있는 경우
         # 특히 "지금 말하는 부분이 이해가 안가요" 같은 질문 감지
         use_transcript_first = has_recent_keyword or (has_understanding_keyword and payload.current_time > 0)
     
+    if is_pdf_question:
+        print(f"[CHAT DEBUG] 📄 PDF/강의자료 관련 질문으로 감지: '{payload.question[:50]}...'")
+    
     try:
+        # answer 변수 초기화 (모든 경로에서 반환되도록 보장)
+        answer = ""
+        sources = []
+        
         # 시간대 기반 질문이면 transcript를 먼저 사용
         result = None
         if use_transcript_first:
             use_transcript = True
-            answer = ""
             docs = []
             metas = []
         else:
@@ -1783,6 +1839,7 @@ def ask(
         if result is not None:
             sources = [str(src) for src in result.get("documents", [])]
         
+        answer = _render_math_plain_text(answer)
         return ChatResponse(
             answer=answer,
             sources=sources,
@@ -1811,11 +1868,105 @@ def ask(
                 context=f"오류: {error_msg[:200]}"
             )
         
+        # answer가 None이거나 빈 문자열인 경우 기본값 사용
+        if not answer or not answer.strip():
+            answer = "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
+        
+        answer = _render_math_plain_text(answer)
         return ChatResponse(
             answer=answer,
             sources=[],
             conversation_id=conversation_id,
             course_id=payload.course_id,
+        )
+
+
+@router.get("/chat/greeting", response_model=ChatResponse)
+def get_greeting(
+    course_id: str = Query(..., description="강의 ID"),
+    pipeline: RAGPipeline = Depends(get_pipeline),
+    session: Session = Depends(get_session),
+) -> ChatResponse:
+    """
+    강사 페르소나 기반 초기 인사말 생성
+    """
+    from urllib.parse import unquote
+    original_course_id = course_id  # 원본 저장 (예외 처리용)
+    
+    try:
+        # URL 디코딩
+        try:
+            course_id = unquote(course_id)
+        except Exception as decode_error:
+            print(f"[GREETING] ⚠️ URL 디코딩 실패 (원본 사용): {decode_error}")
+            # 디코딩 실패 시 원본 사용
+            course_id = original_course_id
+        
+        if not course_id or not course_id.strip():
+            raise ValueError("course_id가 비어있습니다.")
+        
+        # 캐시된 인사말 확인
+        cached = _greeting_cache.get(course_id)
+        if cached:
+            cached_at, cached_message = cached
+            if time.time() - cached_at < _GREETING_CACHE_TTL_SECONDS:
+                return ChatResponse(
+                    answer=cached_message,
+                    sources=[],
+                    conversation_id=None,
+                    course_id=course_id,
+                )
+
+        # 강의 정보 및 강사 정보 가져오기
+        instructor_info = None
+        course_info = None
+        course = session.get(Course, course_id)
+        if course:
+            course_info = {
+                "title": course.title,
+                "category": course.category,
+            }
+            instructor = session.get(Instructor, course.instructor_id)
+            if instructor:
+                instructor_info = {
+                    "name": instructor.name,
+                    "bio": instructor.bio,
+                    "specialization": instructor.specialization,
+                }
+        
+        # 페르소나 기반 인사말 생성
+        greeting_message = _generate_persona_response(
+            user_message="학생이 처음 챗봇을 시작했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요. 강사의 말투와 특징을 잘 살려서 인사해주세요.",
+            course_id=course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=None
+        )
+        
+        # greeting_message가 None이거나 빈 문자열인 경우 기본값 사용
+        if not greeting_message or not greeting_message.strip():
+            greeting_message = "안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요."
+
+        greeting_message = _render_math_plain_text(greeting_message)
+        
+        _greeting_cache[course_id] = (time.time(), greeting_message)
+
+        return ChatResponse(
+            answer=greeting_message,
+            sources=[],
+            conversation_id=None,
+            course_id=course_id,
+        )
+    except Exception as e:
+        print(f"[GREETING] ❌ 오류: {e}")
+        import traceback
+        print(f"[GREETING] Traceback: {traceback.format_exc()}")
+        # 오류 발생 시 기본 인사말 반환 (원본 course_id 사용)
+        return ChatResponse(
+            answer="안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요.",
+            sources=[],
+            conversation_id=None,
+            course_id=original_course_id,  # 원본 사용
         )
 
 
@@ -1834,8 +1985,23 @@ def generate_summary(
     
     # 저장된 transcript 파일 찾기
     transcript_text = _load_transcript_for_course(payload.course_id, session)
+    cache_key = None
     
     if transcript_text:
+        digest = hashlib.md5(transcript_text.encode("utf-8")).hexdigest()
+        cache_key = (payload.course_id, digest)
+        cached = _summary_cache.get(cache_key)
+        if cached:
+            cached_at, cached_summary, cached_key_points = cached
+            if time.time() - cached_at < _SUMMARY_CACHE_TTL_SECONDS:
+                if _CACHE_LOG_ENABLED:
+                    print(f"[CACHE HIT] summary course_id={payload.course_id}")
+                return SummaryResponse(
+                    course_id=payload.course_id,
+                    summary=cached_summary,
+                    key_points=cached_key_points[:10],
+                )
+
         # 저장된 STT 결과물을 직접 사용
         summary_prompt = (
             f"다음은 강의 전사 내용입니다. 이 강의의 핵심 내용을 **마크다운 형식**으로 전문적이고 시각적으로 잘 정리된 요약노트를 작성해주세요.\n\n"
@@ -2086,6 +2252,10 @@ def generate_summary(
         # HTML 태그 제거
         key_points = [re.sub(r'<[^>]+>', '', point).strip() for point in key_points if point]
     
+    # 캐시 저장 (transcript 기반 요약만)
+    if cache_key:
+        _summary_cache[cache_key] = (time.time(), answer, key_points[:10])
+
     return SummaryResponse(
         course_id=payload.course_id,
         summary=answer,
@@ -2106,8 +2276,23 @@ def generate_quiz(
     
     # 저장된 transcript 파일 찾기
     transcript_text = _load_transcript_for_course(payload.course_id, session)
+    cache_key = None
     
     if transcript_text:
+        digest = hashlib.md5(transcript_text.encode("utf-8")).hexdigest()
+        cache_key = (payload.course_id, digest, num_questions)
+        cached = _quiz_cache.get(cache_key)
+        if cached:
+            cached_at, cached_questions = cached
+            if time.time() - cached_at < _QUIZ_CACHE_TTL_SECONDS:
+                if _CACHE_LOG_ENABLED:
+                    print(f"[CACHE HIT] quiz course_id={payload.course_id} num_questions={num_questions}")
+                return QuizResponse(
+                    course_id=payload.course_id,
+                    questions=cached_questions,
+                    quiz_id=f"quiz-{payload.course_id}-{int(__import__('time').time())}",
+                )
+
         # 저장된 STT 결과물을 직접 사용
         quiz_prompt = (
             f"다음은 강의 전사 내용입니다. 이 강의 내용을 바탕으로 객관식 퀴즈 {num_questions}문제를 만들어주세요.\n\n"
@@ -2179,6 +2364,10 @@ def generate_quiz(
     
     # 퀴즈 파싱
     questions = _parse_quiz_from_text(answer, num_questions)
+
+    # 캐시 저장 (transcript 기반 퀴즈만)
+    if cache_key:
+        _quiz_cache[cache_key] = (time.time(), questions)
     
     return QuizResponse(
         course_id=payload.course_id,
@@ -2208,6 +2397,25 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
     try:
         # course_id URL 디코딩 (이중 안전장치)
         decoded_course_id = unquote(course_id) if course_id else course_id
+        
+        # transcript 캐시 확인
+        cache_key = (decoded_course_id, return_segments)
+        cached = _transcript_cache.get(cache_key)
+        if cached:
+            cached_at, cached_value = cached
+            if time.time() - cached_at < _TRANSCRIPT_CACHE_TTL_SECONDS:
+                return cached_value  # type: ignore[return-value]
+        
+        # return_segments=False인데, segments 캐시가 있으면 텍스트만 사용
+        if not return_segments:
+            cached_segments = _transcript_cache.get((decoded_course_id, True))
+            if cached_segments:
+                cached_at, cached_value = cached_segments
+                if time.time() - cached_at < _TRANSCRIPT_CACHE_TTL_SECONDS:
+                    if isinstance(cached_value, dict):
+                        text_value = cached_value.get("text")
+                        if text_value:
+                            return text_value  # type: ignore[return-value]
         
         # Course 정보 가져오기
         course = session.get(Course, decoded_course_id)
@@ -2360,10 +2568,13 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
         if transcript_text and len(transcript_text.strip()) > 0:
             print(f"✅ Loaded transcript from file for course {decoded_course_id}: {transcript_path} (length: {len(transcript_text)})")
             if return_segments:
-                return {
+                result = {
                     "text": transcript_text,
                     "segments": data.get("segments", [])
                 }
+                _transcript_cache[(decoded_course_id, True)] = (time.time(), result)
+                return result
+            _transcript_cache[(decoded_course_id, False)] = (time.time(), transcript_text)
             return transcript_text
         
         print(f"[TRANSCRIPT DEBUG] Transcript text is empty")

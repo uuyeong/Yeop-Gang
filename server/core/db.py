@@ -30,7 +30,7 @@ def _prepare_sqlite_url(url: str) -> str:
             file_path = Path(path[1:])
     else:
         file_path = Path(path)
-    
+
     # 상대 경로 처리 (./data/yeopgang.db -> server/data/yeopgang.db)
     if not file_path.is_absolute():
         # ./data/yeopgang.db -> data/yeopgang.db로 정규화
@@ -195,6 +195,11 @@ def _migrate_add_instructor_profile_columns() -> None:
         if "updated_at" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE instructor ADD COLUMN updated_at DATETIME"))
+        
+        # persona_profile 컬럼 추가 (강사 기본 스타일 분석 결과 저장용)
+        if "persona_profile" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE instructor ADD COLUMN persona_profile TEXT"))
     except Exception as e:
         # 마이그레이션 실패해도 계속 진행 (컬럼이 이미 있을 수 있음)
         import logging

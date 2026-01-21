@@ -11,6 +11,7 @@ from ai.pipelines.rag import RAGPipeline
 from ai.services.stt import transcribe_video
 from ai.style_analyzer import analyze_instructor_style
 import json
+import hashlib
 
 
 def process_course_assets(
@@ -161,6 +162,9 @@ def process_course_assets(
                 texts.append(transcript_text)
                 print(f"[{course_id}] 📝 {len(segments)}개 자막 세그먼트 인제스트 시작...")
                 total_segments = len(segments)
+                batch_texts = []
+                batch_metas = []
+                batch_size = 20
                 for idx, seg in enumerate(segments):
                     seg_text = seg.get("text", "")
                     if not seg_text:
@@ -176,17 +180,40 @@ def process_course_assets(
                         "end_formatted": seg.get("end_formatted"),
                         "type": "subtitle_segment",
                     }
-                    result = pipeline.ingest_texts(
-                        [seg_text],
-                        course_id=course_id,
-                        metadata=seg_meta,
-                    )
-                    ingested_count += result.get("ingested", 0)
+                    batch_texts.append(seg_text)
+                    batch_metas.append(seg_meta)
                     
                     # 진행률 업데이트 (30% ~ 60%)
                     if update_progress and total_segments > 0:
                         embedding_progress = 30 + int((idx + 1) / total_segments * 30)
                         update_progress(embedding_progress, f"세그먼트 임베딩 중... ({idx + 1}/{total_segments})")
+
+                    # 배치 인제스트
+                    is_last = idx == total_segments - 1
+                    if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                        try:
+                            result = pipeline.ingest_texts_with_metadatas(
+                                batch_texts,
+                                course_id=course_id,
+                                metadatas=batch_metas,
+                            )
+                            ingested_count += result.get("ingested", 0)
+                        except Exception as batch_error:
+                            print(f"[{course_id}] ⚠️ SMI 세그먼트 배치 인제스트 오류: {batch_error}")
+                            for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                try:
+                                    result = pipeline.ingest_texts(
+                                        [retry_text],
+                                        course_id=course_id,
+                                        metadata=retry_meta,
+                                    )
+                                    ingested_count += result.get("ingested", 0)
+                                except Exception as seg_error:
+                                    print(f"[{course_id}] ⚠️ SMI 세그먼트 인제스트 재시도 오류: {seg_error}")
+                                    continue
+                        finally:
+                            batch_texts = []
+                            batch_metas = []
                 print(f"[{course_id}] ✅ 자막 세그먼트 인제스트 완료")
                 if update_progress:
                     update_progress(60, "세그먼트 임베딩 완료")
@@ -205,14 +232,39 @@ def process_course_assets(
                 # 첫 업로드이므로 무조건 STT 실행
                 if update_progress:
                     update_progress(20, "음성 인식(STT) 시작...")
-                print(f"[{course_id}] 🔄 Running STT (force_retranscribe=True)...")
+                # 기존 transcript가 있으면 해시 비교 후 재사용
+                transcript_path = None
+                force_retranscribe = True
+                try:
+                    from core.config import AppSettings
+                    app_settings = AppSettings()
+                    course_dir = app_settings.uploads_dir / instructor_id / course_id
+                    transcript_filename = f"transcript_{media_path.stem}.json"
+                    transcript_file_path = course_dir / transcript_filename
+
+                    if transcript_file_path.exists():
+                        # 파일 해시 계산
+                        file_hash = hashlib.md5(media_path.read_bytes()).hexdigest()
+                        with transcript_file_path.open("r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        saved_hash = data.get("source_hash")
+                        if saved_hash and saved_hash == file_hash:
+                            transcript_path = str(transcript_file_path)
+                            force_retranscribe = False
+                            print(f"[{course_id}] ✅ 기존 transcript 재사용 (해시 일치): {transcript_path}")
+                        else:
+                            print(f"[{course_id}] ⚠️ transcript 해시 불일치 또는 없음, STT 재실행")
+                except Exception as e:
+                    print(f"[{course_id}] ⚠️ transcript 재사용 체크 실패, STT 재실행: {e}")
+
+                print(f"[{course_id}] 🔄 Running STT (force_retranscribe={force_retranscribe})...")
                 transcript_result = transcribe_video(
                     str(media_path),
                     settings=settings,
                     instructor_id=instructor_id,
                     course_id=course_id,
-                    transcript_path=None,  # 기존 파일 무시
-                    force_retranscribe=True  # 강제로 STT 실행
+                    transcript_path=transcript_path,
+                    force_retranscribe=force_retranscribe
                 )
                 transcript_text = transcript_result.get("text", "")
                 segments = transcript_result.get("segments", [])
@@ -256,6 +308,7 @@ def process_course_assets(
                             "source_file": media_path.name,
                             "course_id": course_id,
                             "instructor_id": instructor_id,
+                            "source_hash": hashlib.md5(media_path.read_bytes()).hexdigest(),
                         }
 
                         print(f"[{course_id}] Attempting to save transcript to: {transcript_file_path}")
@@ -284,6 +337,9 @@ def process_course_assets(
                     # 세그먼트별 메타데이터 포함하여 RAG 인제스트
                     print(f"[{course_id}] 📝 {len(segments)}개 세그먼트 인제스트 시작...")
                     total_segments = len(segments)
+                    batch_texts = []
+                    batch_metas = []
+                    batch_size = 20
                     for idx, seg in enumerate(segments):
                         seg_text = seg.get("text", "")
                         if not seg_text:
@@ -299,17 +355,40 @@ def process_course_assets(
                             "type": "video_segment" if video_path else "audio_segment",
                         }
 
-                        result = pipeline.ingest_texts(
-                            [seg_text],
-                            course_id=course_id,
-                            metadata=seg_meta,
-                        )
-                        ingested_count += result.get("ingested", 0)
+                        batch_texts.append(seg_text)
+                        batch_metas.append(seg_meta)
                         
                         # 진행률 업데이트 (40% ~ 70%)
                         if update_progress and total_segments > 0:
                             embedding_progress = 40 + int((idx + 1) / total_segments * 30)
                             update_progress(embedding_progress, f"세그먼트 임베딩 중... ({idx + 1}/{total_segments})")
+
+                        # 배치 인제스트
+                        is_last = idx == total_segments - 1
+                        if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                            try:
+                                result = pipeline.ingest_texts_with_metadatas(
+                                    batch_texts,
+                                    course_id=course_id,
+                                    metadatas=batch_metas,
+                                )
+                                ingested_count += result.get("ingested", 0)
+                            except Exception as batch_error:
+                                print(f"[{course_id}] ⚠️ 세그먼트 배치 인제스트 오류: {batch_error}")
+                                for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                    try:
+                                        result = pipeline.ingest_texts(
+                                            [retry_text],
+                                            course_id=course_id,
+                                            metadata=retry_meta,
+                                        )
+                                        ingested_count += result.get("ingested", 0)
+                                    except Exception as seg_error:
+                                        print(f"[{course_id}] ⚠️ 세그먼트 인제스트 재시도 오류: {seg_error}")
+                                        continue
+                            finally:
+                                batch_texts = []
+                                batch_metas = []
 
                     print(f"[{course_id}] ✅ 세그먼트 인제스트 완료")
                     if update_progress:
@@ -328,12 +407,14 @@ def process_course_assets(
                 if update_progress:
                     update_progress(70, "PDF 처리 시작...")
                 print(f"[{course_id}] 📄 PDF 멀티모달 처리 시작: {pdf_path.name}")
+                print(f"[{course_id}] 📄 이미지 추출 활성화: extract_images=True")
                 # PDF 처리 모듈이 있으면 사용, 없으면 스킵
                 try:
                     from ai.services.pdf import extract_pdf_content
                     pdf_result = extract_pdf_content(str(pdf_path), settings=settings, extract_images=True)
                     pdf_texts = pdf_result.get("texts", [])
                     pdf_metadata_list = pdf_result.get("metadata", [])
+                    print(f"[{course_id}] 📄 PDF 처리 완료: {len(pdf_texts)}개 페이지 추출됨")
                     
                     if pdf_texts:
                         # PDF 텍스트를 persona 생성용 샘플에 추가
@@ -342,56 +423,185 @@ def process_course_assets(
                         # 페이지별로 개별 RAG 인제스트 (페이지 번호 등 메타데이터 포함)
                         print(f"[{course_id}] 🖼️ PDF {len(pdf_texts)}개 페이지 인제스트 시작...")
                         total_pages = len(pdf_texts)
+                        batch_texts = []
+                        batch_metas = []
+                        batch_size = 10
                         for page_idx, (pdf_text, pdf_meta) in enumerate(zip(pdf_texts, pdf_metadata_list)):
-                            page_meta = {
-                                "course_id": course_id,
-                                "instructor_id": instructor_id,
-                                "source": pdf_path.name,
-                                "page_number": pdf_meta.get("page_number"),
-                                "type": "pdf_page",
-                            }
-                            
-                            result = pipeline.ingest_texts(
-                                [pdf_text],
-                                course_id=course_id,
-                                metadata=page_meta,
-                            )
-                            ingested_count += result.get("ingested", 0)
-                            
-                            # 진행률 업데이트 (70% ~ 75%)
-                            if update_progress and total_pages > 0:
-                                pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
-                                update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
+                            try:
+                                page_num = pdf_meta.get("page_number")
+                                if page_num is None:
+                                    # pdf_meta에 page_number가 없으면 page_idx + 1 사용
+                                    page_num = page_idx + 1
+                                    print(f"[{course_id}] ⚠️ PDF 메타데이터에 page_number가 없어서 {page_num}로 설정")
+
+                                page_meta = {
+                                    "course_id": course_id,
+                                    "instructor_id": instructor_id,
+                                    "source": pdf_path.name,
+                                    "page_number": page_num,  # 명시적으로 int로 저장
+                                    "type": "pdf_page",
+                                }
+                                print(f"[{course_id}] 📄 PDF 페이지 {page_num} 인제스트: {pdf_text[:50]}...")
+
+                                batch_texts.append(pdf_text)
+                                batch_metas.append(page_meta)
+
+                                # 진행률 업데이트 (70% ~ 75%)
+                                if update_progress and total_pages > 0:
+                                    pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
+                                    update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
+                            except Exception as page_error:
+                                print(f"[{course_id}] ⚠️ PDF 페이지 {page_idx + 1} 인제스트 오류: {page_error}")
+                                # 개별 페이지 오류는 건너뛰고 계속 진행
+                                continue
+
+                            # 배치 처리
+                            is_last = page_idx == total_pages - 1
+                            if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                                try:
+                                    result = pipeline.ingest_texts_with_metadatas(
+                                        batch_texts,
+                                        course_id=course_id,
+                                        metadatas=batch_metas,
+                                    )
+                                    ingested_count += result.get("ingested", 0)
+                                except Exception as batch_error:
+                                    print(f"[{course_id}] ⚠️ PDF 배치 인제스트 오류: {batch_error}")
+                                    # 배치 실패 시 페이지 단위로 재시도
+                                    for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                        try:
+                                            result = pipeline.ingest_texts(
+                                                [retry_text],
+                                                course_id=course_id,
+                                                metadata=retry_meta,
+                                            )
+                                            ingested_count += result.get("ingested", 0)
+                                        except Exception as page_error:
+                                            print(f"[{course_id}] ⚠️ PDF 페이지 인제스트 재시도 오류: {page_error}")
+                                            continue
+                                finally:
+                                    batch_texts = []
+                                    batch_metas = []
                         
-                        print(f"[{course_id}] ✅ PDF 페이지 인제스트 완료")
+                        print(f"[{course_id}] ✅ PDF 페이지 인제스트 완료 ({len(pdf_texts)}개 페이지)")
                     else:
                         print(f"[{course_id}] ⚠️ PDF에서 텍스트를 추출하지 못했습니다: {pdf_path.name}")
+                        # PDF 텍스트가 없어도 계속 진행
                 except ImportError:
                     print(f"[{course_id}] ⚠️ PDF 처리 모듈이 없습니다. PDF 처리를 건너뜁니다.")
                     # PDF 처리 모듈이 없어도 계속 진행
+                except Exception as pdf_error:
+                    # PDF 처리 중 치명적 오류 발생 시에도 계속 진행
+                    error_msg = f"[{course_id}] ⚠️ PDF 처리 중 오류 발생: {str(pdf_error)}"
+                    print(error_msg)
+                    import traceback
+                    print(f"[{course_id}] PDF 오류 상세: {traceback.format_exc()}")
+                    # PDF 처리는 실패했지만 나머지 처리 계속 진행
                         
             except Exception as e:
                 error_msg = f"[{course_id}] ❌ PDF 처리 오류 ({pdf_path.name}): {str(e)}"
                 print(error_msg)
                 # 오류가 발생해도 계속 진행
         
-        # 3. Style Analyzer 실행 (초반 5분 분석) 및 페르소나 추출
+        # 3. Style Analyzer 실행 (강의 목록 단위 말투 관리)
+        # - 부모 강의(parent_course_id가 null)에 persona_profile 저장
+        # - 챕터(parent_course_id가 있음)는 부모 강의의 persona_profile 재사용
         persona_profile_json = None
         if segments and len(segments) > 0:
             if update_progress:
                 update_progress(75, "강사 스타일 분석 중...")
-            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 5분 분석)...")
+            
+            # 현재 course가 챕터인지 부모 강의인지 확인
+            parent_course_id = None
+            is_chapter = False
             try:
-                persona_profile = analyze_instructor_style(segments, settings=settings)
-                persona_profile_json = json.dumps(persona_profile, ensure_ascii=False)
-                print(f"[{course_id}] ✅ Style Analyzer 완료: {persona_profile_json[:100]}...")
+                from core.db import engine
+                from sqlmodel import Session
+                from core.models import Course
                 
-                # persona_profile은 반환값에 포함하여 backB가 DB에 저장하도록 함
-                
-            except Exception as e:
-                error_msg = f"[{course_id}] ❌ Style Analyzer 오류: {str(e)}"
-                print(error_msg)
-                # Style Analyzer 실패해도 계속 진행
+                with Session(engine) as db_session:
+                    current_course = db_session.get(Course, course_id)
+                    if current_course:
+                        parent_course_id = current_course.parent_course_id
+                        is_chapter = parent_course_id is not None
+                        if is_chapter:
+                            print(f"[{course_id}] 📚 챕터 감지됨 (부모 강의: {parent_course_id})")
+                        else:
+                            print(f"[{course_id}] 📖 부모 강의 감지됨")
+            except Exception as db_e:
+                print(f"[{course_id}] ⚠️ Course 정보 확인 실패: {db_e}")
+                # DB 조회 실패해도 계속 진행
+            
+            # 챕터인 경우: 부모 강의의 persona_profile 재사용
+            if is_chapter and parent_course_id:
+                try:
+                    from core.db import engine
+                    from sqlmodel import Session
+                    from core.models import Course
+                    
+                    with Session(engine) as db_session:
+                        parent_course = db_session.get(Course, parent_course_id)
+                        if parent_course and parent_course.persona_profile:
+                            persona_profile_json = parent_course.persona_profile
+                            print(f"[{course_id}] ✅ 부모 강의 말투 발견 (재사용): {parent_course_id}")
+                            print(f"[{course_id}] ♻️ 부모 강의 말투 재사용 (API 호출 생략)")
+                        else:
+                            print(f"[{course_id}] ⚠️ 부모 강의({parent_course_id})의 말투가 없습니다. 새로 분석합니다.")
+                            # 부모 강의 말투가 없으면 새로 분석 (부모 강의에 저장)
+                            is_chapter = False  # 부모 강의처럼 처리
+                            parent_course_id = None
+                except Exception as db_e:
+                    print(f"[{course_id}] ⚠️ 부모 강의 말투 확인 실패: {db_e}")
+                    # 부모 강의 말투 확인 실패 시 새로 분석
+                    is_chapter = False
+                    parent_course_id = None
+            
+            # 부모 강의인 경우 (또는 부모 강의 말투가 없는 챕터): 부모 강의의 persona_profile 확인
+            if not is_chapter:
+                target_course_id = course_id  # 부모 강의 ID 사용
+                try:
+                    from core.db import engine
+                    from sqlmodel import Session
+                    from core.models import Course
+                    
+                    with Session(engine) as db_session:
+                        target_course = db_session.get(Course, target_course_id)
+                        if target_course and target_course.persona_profile:
+                            # 부모 강의 말투가 이미 있으면 재사용
+                            persona_profile_json = target_course.persona_profile
+                            print(f"[{course_id}] ✅ 부모 강의 말투 발견 (재사용): {target_course_id}")
+                            print(f"[{course_id}] ♻️ 부모 강의 말투 재사용 (API 호출 생략)")
+                        else:
+                            # 부모 강의 말투가 없으면 새로 분석
+                            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 5분 분석)...")
+                            try:
+                                persona_profile = analyze_instructor_style(segments, settings=settings)
+                                persona_profile_json = json.dumps(persona_profile, ensure_ascii=False)
+                                print(f"[{course_id}] ✅ Style Analyzer 완료: {persona_profile_json[:100]}...")
+                                
+                                # 부모 강의의 persona_profile에 저장
+                                try:
+                                    with Session(engine) as db_session:
+                                        target_course = db_session.get(Course, target_course_id)
+                                        if target_course:
+                                            target_course.persona_profile = persona_profile_json
+                                            db_session.add(target_course)
+                                            db_session.commit()
+                                            db_session.refresh(target_course)
+                                            print(f"[{course_id}] ✅ 부모 강의 말투를 Course DB에 저장 완료 (course_id: {target_course_id})")
+                                        else:
+                                            print(f"[{course_id}] ⚠️ 부모 강의({target_course_id})를 찾을 수 없어 말투를 저장하지 못했습니다.")
+                                except Exception as db_e:
+                                    print(f"[{course_id}] ⚠️ 부모 강의 말투 DB 저장 실패: {db_e}")
+                                    # DB 저장 실패해도 계속 진행
+                                
+                            except Exception as e:
+                                error_msg = f"[{course_id}] ❌ Style Analyzer 오류: {str(e)}"
+                                print(error_msg)
+                                # Style Analyzer 실패해도 계속 진행
+                except Exception as db_e:
+                    print(f"[{course_id}] ⚠️ 부모 강의 말투 확인 실패: {db_e}")
+                    # DB 조회 실패해도 계속 진행
         
         # 4. 페르소나 프롬프트 생성 및 RAG 인제스트
         if texts:
@@ -410,7 +620,7 @@ def process_course_assets(
                 else:
                     # 기존 방식 (fallback) - 강사 정보는 포함하지 않음 (DB에서 동적으로 로드)
                     persona_prompt = pipeline.generate_persona_prompt(
-                        course_id=course_id, 
+                        course_id=course_id,
                         sample_texts=texts,
                         instructor_info=None  # ChromaDB에 저장하지 않음
                     )

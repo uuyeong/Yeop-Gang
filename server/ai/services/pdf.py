@@ -2,9 +2,12 @@
 PDF 처리 서비스: 텍스트 추출 및 이미지(도표/그림) 설명 생성
 """
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import io
 import base64
+import hashlib
+import time
+from collections import OrderedDict
 
 from ai.config import AISettings
 
@@ -22,6 +25,32 @@ try:
     from openai import OpenAI
 except Exception:
     OpenAI = None  # type: ignore
+
+# 이미지 설명 캐시 (API 비용 절감용)
+_IMAGE_DESC_CACHE: "OrderedDict[str, Tuple[float, str]]" = OrderedDict()
+_IMAGE_DESC_CACHE_TTL_SECONDS = 3600
+_IMAGE_DESC_CACHE_MAX = 512
+_MAX_IMAGES_PER_PAGE = 6
+_MAX_IMAGES_TOTAL = 50
+
+
+def _image_cache_get(key: str) -> Optional[str]:
+    cached = _IMAGE_DESC_CACHE.get(key)
+    if not cached:
+        return None
+    cached_at, cached_text = cached
+    if time.time() - cached_at > _IMAGE_DESC_CACHE_TTL_SECONDS:
+        _IMAGE_DESC_CACHE.pop(key, None)
+        return None
+    _IMAGE_DESC_CACHE.move_to_end(key)
+    return cached_text
+
+
+def _image_cache_set(key: str, value: str) -> None:
+    _IMAGE_DESC_CACHE[key] = (time.time(), value)
+    _IMAGE_DESC_CACHE.move_to_end(key)
+    if len(_IMAGE_DESC_CACHE) > _IMAGE_DESC_CACHE_MAX:
+        _IMAGE_DESC_CACHE.popitem(last=False)
 
 
 def _openai_client(settings: AISettings):
@@ -52,6 +81,12 @@ def describe_image_with_vision(
     if OpenAI is None or not settings.openai_api_key:
         print(f"Warning: OPENAI_API_KEY is not set. Cannot describe image for page {page_num}.")
         return f"이미지 설명 플레이스홀더 (페이지 {page_num}). OPENAI_API_KEY가 설정되지 않았습니다."
+
+    # 캐시 확인 (이미지 바이트 기반)
+    image_hash = hashlib.md5(image_bytes).hexdigest()
+    cached = _image_cache_get(image_hash)
+    if cached:
+        return cached
 
     client = _openai_client(settings)
     
@@ -92,7 +127,10 @@ def describe_image_with_vision(
             ],
             max_tokens=1000,
         )
-        return response.choices[0].message.content
+        result_text = response.choices[0].message.content
+        if result_text:
+            _image_cache_set(image_hash, result_text)
+        return result_text
     except Exception as e:
         print(f"Error describing image with Vision API (page {page_num}): {e}")
         return f"이미지 설명 생성 오류 (페이지 {page_num}): {str(e)}"
@@ -124,27 +162,48 @@ def extract_pdf_content(
     all_metadata: List[Dict[str, Any]] = []
     
     try:
+        total_image_count = 0
         for page_num in range(len(doc)):
+            try:
             page = doc[page_num]
             
-            # 1. 텍스트 추출
+                # 1. 텍스트 추출 (오류 발생 시 빈 문자열로 처리)
+                try:
             page_text = page.get_text("text").strip()
+                except Exception as e:
+                    print(f"⚠️ 텍스트 추출 오류 (페이지 {page_num + 1}): {e}")
+                    page_text = ""  # 텍스트 추출 실패 시 빈 문자열
             
             # 2. 이미지 추출 (선택적)
             image_descriptions: List[str] = []
             if extract_images:
+                    try:
                 image_list = page.get_images(full=True)
+                        print(f"📄 페이지 {page_num + 1}: 이미지 {len(image_list)}개 발견")
+                        if len(image_list) > _MAX_IMAGES_PER_PAGE:
+                            print(f"⚠️ 페이지 {page_num + 1}: 이미지 {len(image_list)}개 중 {_MAX_IMAGES_PER_PAGE}개만 처리")
+                            image_list = image_list[:_MAX_IMAGES_PER_PAGE]
+                    except Exception as e:
+                        print(f"⚠️ 이미지 목록 추출 오류 (페이지 {page_num + 1}): {e}")
+                        image_list = []  # 이미지 목록 추출 실패 시 빈 리스트
                 
                 # 이미지 주변 텍스트를 컨텍스트로 사용
                 context_text = page_text[:1000] if page_text else ""  # 간단한 컨텍스트
                 
+                    if len(image_list) == 0:
+                        print(f"📄 페이지 {page_num + 1}: 이미지가 없습니다.")
+                    
                 for img_idx, img_info in enumerate(image_list):
+                    if total_image_count >= _MAX_IMAGES_TOTAL:
+                        print(f"⚠️ 이미지 설명 최대치({_MAX_IMAGES_TOTAL}) 도달, 이후 이미지 처리 생략")
+                        break
                     try:
                         xref = img_info[0]
                         base_image = doc.extract_image(xref)
                         image_bytes = base_image["image"]
                         
                         # 이미지 설명 생성
+                            print(f"🖼️ 이미지 설명 생성 중 (페이지 {page_num + 1}, 이미지 {img_idx + 1})...")
                         description = describe_image_with_vision(
                             image_bytes=image_bytes,
                             settings=settings,
@@ -152,15 +211,21 @@ def extract_pdf_content(
                             context=context_text,
                         )
                         image_descriptions.append(f"이미지/도표 설명 (페이지 {page_num + 1}-{img_idx + 1}): {description}")
+                            print(f"✅ 이미지 설명 생성 완료 (페이지 {page_num + 1}, 이미지 {img_idx + 1}): {description[:100]}...")
+                        total_image_count += 1
                         
                     except Exception as e:
-                        print(f"이미지 추출 오류 (페이지 {page_num + 1}, 이미지 {img_idx + 1}): {e}")
-                        continue
+                            print(f"⚠️ 이미지 추출 오류 (페이지 {page_num + 1}, 이미지 {img_idx + 1}): {e}")
+                            continue  # 개별 이미지 오류는 건너뛰고 계속 진행
             
             # 3. 텍스트와 이미지 설명을 결합
             combined_text = page_text
             if image_descriptions:
                 combined_text += "\n\n" + "\n\n".join(image_descriptions)
+                    print(f"📄 페이지 {page_num + 1}: 이미지 설명 {len(image_descriptions)}개 추가됨")
+                else:
+                    if extract_images:
+                        print(f"📄 페이지 {page_num + 1}: 이미지 설명 없음 (이미지가 없거나 추출 실패)")
             
             if combined_text.strip(): # 내용이 있는 경우만 추가
                 all_texts.append(combined_text)
@@ -169,6 +234,18 @@ def extract_pdf_content(
                     "page_number": page_num + 1,  # 1-based
                     "type": "pdf_page",
                 })
+                elif page_text.strip():  # 텍스트만 있어도 추가
+                    all_texts.append(page_text)
+                    all_metadata.append({
+                        "source": path.name,
+                        "page_number": page_num + 1,
+                        "type": "pdf_page",
+                    })
+            except Exception as e:
+                # 페이지 전체 처리 실패 시에도 계속 진행
+                print(f"⚠️ 페이지 {page_num + 1} 처리 오류: {e}")
+                print(f"⚠️ 해당 페이지를 건너뛰고 계속 진행합니다.")
+                continue  # 다음 페이지로 계속 진행
         
         return {
             "texts": all_texts,

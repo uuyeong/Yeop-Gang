@@ -25,6 +25,7 @@ class Instructor(SQLModel, table=True):
     bio: Optional[str] = Field(default=None, description="자기소개")
     phone: Optional[str] = Field(default=None, description="전화번호")
     specialization: Optional[str] = Field(default=None, description="전문 분야")
+    persona_profile: Optional[str] = Field(default=None, description="강사 기본 스타일 분석 결과 (JSON 문자열) - 첫 강의에서 추출하여 재사용")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
