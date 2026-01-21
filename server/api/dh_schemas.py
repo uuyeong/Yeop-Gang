@@ -60,10 +60,14 @@ class RegisterInstructorRequest(BaseModel):
 
 
 class UpdateInstructorRequest(BaseModel):
-    """강사 프로필 수정 요청"""
+    """강사 프로필(개인정보) 수정 요청 - 보낸 필드만 변경"""
     name: Optional[str] = Field(default=None, description="이름")
     email: Optional[str] = Field(default=None, description="이메일")
-    
+    profile_image_url: Optional[str] = Field(default=None, description="프로필 이미지 URL")
+    bio: Optional[str] = Field(default=None, description="자기소개")
+    phone: Optional[str] = Field(default=None, description="전화번호")
+    specialization: Optional[str] = Field(default=None, description="전문 분야")
+
     @field_validator('email')
     @classmethod
     def validate_email(cls, v: Optional[str]) -> Optional[str]:
@@ -72,7 +76,6 @@ class UpdateInstructorRequest(BaseModel):
             return v
         if not v.strip():
             return None
-        # 기본적인 이메일 형식 검증
         email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_pattern, v):
             raise ValueError("올바른 이메일 형식이 아닙니다.")

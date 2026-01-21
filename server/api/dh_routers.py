@@ -378,6 +378,17 @@ async def instructor_upload(
         
         logger.info(f"🔍 강의 정보 확인 중 - course_id: {course_id}")
         course = session.get(Course, course_id)
+        
+        # 챕터 업로드 시 기존 챕터가 있으면 에러 발생 (의도하지 않은 덮어쓰기 방지)
+        if course and parent_course_id:
+            # 같은 부모 강의의 챕터인지 확인
+            if course.parent_course_id == parent_course_id.strip():
+                logger.warning(f"⚠️ 챕터가 이미 존재함 - course_id: {course_id}, parent_course_id: {parent_course_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"챕터 '{course_id}'가 이미 존재합니다. 같은 챕터 번호로 다시 업로드하려면 기존 챕터를 먼저 삭제하거나 다른 챕터 번호를 사용하세요."
+                )
+        
         if not course:
             logger.info(f"➕ 새 강의 생성 중 - course_id: {course_id}")
             # Course 생성 시 is_public 컬럼이 있으면 기본값 설정
@@ -636,32 +647,61 @@ async def instructor_update_profile(
     current_user: dict = Depends(require_instructor()),
     session: Session = Depends(get_session),
 ) -> dict:
-    """강사가 자신의 프로필 정보 수정 (이름, 이메일)"""
+    """강사가 자신의 프로필(개인정보) 수정 - 이름, 이메일, 프로필 이미지, 자기소개, 전화번호, 전문 분야"""
     from datetime import datetime
-    
-    # 강사 확인
+
     instructor = session.get(Instructor, current_user["id"])
     if not instructor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="강사 정보를 찾을 수 없습니다."
         )
-    
-    # 수정할 필드 업데이트
-    if payload.name is not None:
-        instructor.name = payload.name.strip() if payload.name.strip() else None
-    if payload.email is not None:
-        instructor.email = payload.email.strip() if payload.email.strip() else None
-    
+
+    # 보낸 필드만 업데이트 (빈 문자열은 None으로 저장, 필드 생략 시 기존값 유지)
+    def _set(attr: str, val: Optional[str]) -> None:
+        if val is not None:
+            # profile_image_url은 Base64 데이터 URL일 수 있으므로 strip만 하고 None 변환하지 않음
+            if attr == "profile_image_url":
+                # 빈 문자열이면 None, 그 외에는 그대로 저장 (Base64 데이터 URL 포함)
+                if val.strip() == "":
+                    setattr(instructor, attr, None)
+                    logger.debug(f"{attr} = None (빈 문자열)")
+                else:
+                    setattr(instructor, attr, val.strip())
+                    logger.debug(f"{attr} = {val.strip()[:50]}... (길이: {len(val.strip())})")
+            else:
+                setattr(instructor, attr, (val.strip() or None))
+
+    logger.debug(f"프로필 업데이트 요청 - instructor_id: {current_user['id']}")
+    logger.debug(f"payload.profile_image_url 존재: {payload.profile_image_url is not None}")
+    if payload.profile_image_url:
+        logger.debug(f"payload.profile_image_url 길이: {len(payload.profile_image_url)}")
+        logger.debug(f"payload.profile_image_url 시작: {payload.profile_image_url[:100]}")
+
+    _set("name", payload.name)
+    _set("email", payload.email)
+    _set("profile_image_url", payload.profile_image_url)
+    _set("bio", payload.bio)
+    _set("phone", payload.phone)
+    _set("specialization", payload.specialization)
+
+    instructor.updated_at = datetime.utcnow()
     session.add(instructor)
     session.commit()
     session.refresh(instructor)
-    
+
+    logger.debug(f"저장된 profile_image_url: {instructor.profile_image_url[:50] if instructor.profile_image_url else None}...")
+
     return {
         "message": "프로필 정보가 수정되었습니다.",
         "instructor_id": instructor.id,
         "name": instructor.name,
         "email": instructor.email,
+        "profile_image_url": instructor.profile_image_url,
+        "bio": instructor.bio,
+        "phone": instructor.phone,
+        "specialization": instructor.specialization,
+        "updated_at": instructor.updated_at.isoformat() if instructor.updated_at else None,
     }
 
 
@@ -671,14 +711,14 @@ async def instructor_delete_course(
     current_user: dict = Depends(require_instructor()),
     session: Session = Depends(get_session),
 ) -> dict:
-    """강사가 자신의 강의 삭제 (권한 체크 포함)"""
+    """강사가 자신의 강의 삭제 (권한 체크 포함). DB·벡터·파일 모두 삭제. 자식 챕터·CourseEnrollment 캐스케이드."""
     from pathlib import Path
     import shutil
     from core.config import AppSettings
     from ai.config import AISettings
     from ai.services.vectorstore import get_chroma_client, get_collection
     from core.models import Video, ChatSession
-    
+
     # 1. 강의 확인 및 권한 체크
     course = session.get(Course, course_id)
     if not course:
@@ -686,53 +726,55 @@ async def instructor_delete_course(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"강의를 찾을 수 없습니다: {course_id}"
         )
-    
-    # 자신의 강의만 삭제 가능
+
     if course.instructor_id != current_user["id"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="다른 강사의 강의는 삭제할 수 없습니다."
         )
-    
+
     instructor_id = course.instructor_id
-    
-    # 2. 관련 데이터 삭제 (Video, ChatSession)
-    videos = session.exec(select(Video).where(Video.course_id == course_id)).all()
-    for video in videos:
-        session.delete(video)
-    
-    sessions = session.exec(select(ChatSession).where(ChatSession.course_id == course_id)).all()
-    for sess in sessions:
-        session.delete(sess)
-    
-    # 3. 강의 삭제
-    session.delete(course)
+
+    # 2. 삭제 대상: 자식 챕터 먼저, 그 다음 부모 (FK 참조 때문에 순서 유지)
+    chapters = session.exec(select(Course).where(Course.parent_course_id == course_id)).all()
+    course_ids_to_delete = [ch.id for ch in chapters] + [course_id]
+
+    # 3. DB 삭제: 각 강의에 대해 Video, ChatSession, CourseEnrollment, Course
+    for cid in course_ids_to_delete:
+        for video in session.exec(select(Video).where(Video.course_id == cid)).all():
+            session.delete(video)
+        for sess in session.exec(select(ChatSession).where(ChatSession.course_id == cid)).all():
+            session.delete(sess)
+        for enr in session.exec(select(CourseEnrollment).where(CourseEnrollment.course_id == cid)).all():
+            session.delete(enr)
+        c = session.get(Course, cid)
+        if c:
+            session.delete(c)
     session.commit()
-    
-    # 4. 벡터 DB에서 강의 데이터 삭제
+
+    # 4. 벡터 DB에서 강의 데이터 삭제 (삭제한 모든 course_id)
     try:
         ai_settings = AISettings()
         client = get_chroma_client(ai_settings)
         collection = get_collection(client, ai_settings)
-        
-        # course_id로 필터링하여 삭제
-        results = collection.get(where={"course_id": course_id})
-        if results and results.get("ids"):
-            collection.delete(ids=results["ids"])
+        for cid in course_ids_to_delete:
+            results = collection.get(where={"course_id": cid})
+            if results and results.get("ids"):
+                collection.delete(ids=results["ids"])
     except Exception as e:
         print(f"벡터 DB 삭제 중 오류 (무시): {e}")
-    
-    # 5. 업로드 파일 삭제
+
+    # 5. 업로드 파일 삭제 (삭제한 모든 course_id)
     try:
         settings = AppSettings()
         uploads_dir = settings.uploads_dir
-        
-        course_dir = uploads_dir / instructor_id / course_id
-        if course_dir.exists():
-            shutil.rmtree(course_dir)
+        for cid in course_ids_to_delete:
+            course_dir = uploads_dir / instructor_id / cid
+            if course_dir.exists():
+                shutil.rmtree(course_dir)
     except Exception as e:
         print(f"파일 삭제 중 오류 (무시): {e}")
-    
+
     return {
         "message": f"강의 '{course_id}'가 삭제되었습니다.",
         "course_id": course_id,
@@ -741,7 +783,7 @@ async def instructor_delete_course(
 
 @router.get("/instructor/profile", response_model=InstructorProfileResponse)
 async def get_instructor_profile(
-    current_user: dict = Depends(require_instructor),
+    current_user: dict = Depends(require_instructor()),
     session: Session = Depends(get_session),
 ) -> InstructorProfileResponse:
     """강사 프로필 정보 조회 (자신의 프로필만)"""
@@ -756,6 +798,12 @@ async def get_instructor_profile(
     course_count = len(session.exec(
         select(Course).where(Course.instructor_id == instructor.id)
     ).all())
+    
+    logger.debug(f"프로필 조회 - instructor_id: {instructor.id}")
+    logger.debug(f"profile_image_url 존재: {instructor.profile_image_url is not None}")
+    if instructor.profile_image_url:
+        logger.debug(f"profile_image_url 길이: {len(instructor.profile_image_url)}")
+        logger.debug(f"profile_image_url 시작: {instructor.profile_image_url[:100]}")
     
     return InstructorProfileResponse(
         id=instructor.id,

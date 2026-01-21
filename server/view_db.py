@@ -135,23 +135,29 @@ if "student" in table_names:
     else:
         print("\n등록된 학생이 없습니다.")
 
-# course 테이블 요약 정보
+# course 테이블 (강의 목록) 상세 정보
 if "course" in table_names:
     print("\n" + "=" * 80)
-    print("📚 Course 테이블 요약")
+    print("📚 Course 테이블 (강의 목록) 상세 정보")
     print("=" * 80)
+    
+    # 컬럼 정보
+    cursor.execute("PRAGMA table_info(course);")
+    columns = cursor.fetchall()
+    column_names = [col[1] for col in columns]
+    print(f"\n컬럼 ({len(column_names)}개): {', '.join(column_names)}")
     
     cursor.execute("SELECT COUNT(*) as total, COUNT(DISTINCT instructor_id) as instructors FROM course;")
     stats = cursor.fetchone()
-    print(f"\n총 강의 수: {stats['total']}개")
-    print(f"강사 수: {stats['instructors']}명")
+    print(f"\n총 강의 수: {stats[0]}개")
+    print(f"강사 수: {stats[1]}명")
     
-    if stats['total'] > 0:
+    if stats[0] > 0:
         print("\n최근 강의:")
         cursor.execute("SELECT id, title, instructor_id, status FROM course ORDER BY created_at DESC LIMIT 5;")
         courses = cursor.fetchall()
-        for course in courses:
-            print(f"  - {course['id']}: {course['title'] or '(제목 없음)'} [{course['status']}]")
+        for c in courses:
+            print(f"  - {c[0]}: {c[1] or '(제목 없음)'} [{c[3]}]")
 
 # courseenrollment 테이블 요약
 if "courseenrollment" in table_names:

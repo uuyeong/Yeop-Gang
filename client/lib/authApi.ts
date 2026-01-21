@@ -42,6 +42,16 @@ export type InstructorProfileResponse = {
   course_count: number;
 };
 
+/** 강사 프로필(개인정보) 수정 요청 - 보낸 필드만 반영 */
+export type UpdateInstructorRequest = {
+  name?: string | null;
+  email?: string | null;
+  profile_image_url?: string | null;
+  bio?: string | null;
+  phone?: string | null;
+  specialization?: string | null;
+};
+
 /**
  * 강사 회원가입
  */
@@ -112,6 +122,7 @@ export async function getInstructorProfile(
   const url = `${API_BASE_URL}/api/instructor/profile`;
   
   try {
+    console.log("[authApi] 프로필 조회 요청:", url);
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -127,9 +138,46 @@ export async function getInstructorProfile(
     }
 
     const result = await response.json();
+    console.log("[authApi] 프로필 조회 응답:", {
+      ...result,
+      profile_image_url: result.profile_image_url ? `${result.profile_image_url.substring(0, 50)}...` : null,
+    });
     return result;
   } catch (error) {
-    console.error("프로필 조회 예외:", error);
+    console.error("[authApi] 프로필 조회 예외:", error);
     throw handleApiError(error);
   }
+}
+
+/**
+ * 강사 프로필(개인정보) 수정
+ */
+export async function updateInstructorProfile(
+  token: string,
+  data: UpdateInstructorRequest
+): Promise<{ message: string; name?: string; email?: string; profile_image_url?: string | null; [k: string]: unknown }> {
+  const url = `${API_BASE_URL}/api/instructor/profile`;
+  console.log("[authApi] 프로필 업데이트 요청:", {
+    ...data,
+    profile_image_url: data.profile_image_url ? `${data.profile_image_url.substring(0, 50)}...` : null,
+  });
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const msg = errorData.detail || errorData.message || getHttpErrorMessage(response.status);
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  const result = await response.json();
+  console.log("[authApi] 프로필 업데이트 응답:", {
+    ...result,
+    profile_image_url: result.profile_image_url ? `${result.profile_image_url.substring(0, 50)}...` : null,
+  });
+  return result;
 }

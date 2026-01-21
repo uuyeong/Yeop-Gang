@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { User, LogOut, LogIn, UserPlus } from "lucide-react";
-import { isAuthenticated, getUser, removeToken } from "@/lib/auth";
+import { User, LogOut, LogIn, UserPlus, UserCog } from "lucide-react";
+import { isAuthenticated, getUser, getToken, removeToken, saveUser } from "@/lib/auth";
+import { getInstructorProfile } from "@/lib/authApi";
+import EditProfileModal from "@/components/EditProfileModal";
 
 type HeaderProps = {
   onLoginClick?: () => void;
@@ -12,6 +14,8 @@ type HeaderProps = {
 export default function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
   const [authenticated, setAuthenticated] = useState(false);
   const [user, setUser] = useState<{ id: string; role: string; name?: string } | null>(null);
+  const [profileImageUrl, setProfileImageUrl] = useState<string | null>(null);
+  const [showEditProfileModal, setShowEditProfileModal] = useState(false);
 
   useEffect(() => {
     checkAuth();
@@ -30,13 +34,43 @@ export default function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
     };
   }, []);
 
+  const loadProfileImage = () => {
+    const currentUser = getUser();
+    if (currentUser?.role === "instructor") {
+      const token = getToken() || (typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null);
+      if (token) {
+        getInstructorProfile(token)
+          .then((profile) => {
+            console.log("[Header] 프로필 전체:", profile);
+            console.log("[Header] 프로필 이미지 URL:", profile.profile_image_url ? profile.profile_image_url.substring(0, 100) + "..." : "없음");
+            if (profile.profile_image_url && profile.profile_image_url.trim()) {
+              console.log("[Header] 프로필 이미지 URL 설정:", profile.profile_image_url.substring(0, 50));
+              setProfileImageUrl(profile.profile_image_url);
+            } else {
+              console.log("[Header] 프로필 이미지 없음 - null 설정");
+              setProfileImageUrl(null);
+            }
+          })
+          .catch((e) => {
+            console.error("[Header] 프로필 이미지 로드 실패:", e);
+            setProfileImageUrl(null);
+          });
+      }
+    } else {
+      setProfileImageUrl(null);
+    }
+  };
+
   const checkAuth = () => {
     const isAuth = isAuthenticated();
     setAuthenticated(isAuth);
     if (isAuth) {
-      setUser(getUser());
+      const currentUser = getUser();
+      setUser(currentUser);
+      loadProfileImage();
     } else {
       setUser(null);
+      setProfileImageUrl(null);
     }
   };
 
@@ -61,8 +95,35 @@ export default function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
           <div className="flex items-center gap-4">
             {authenticated && user ? (
               <>
+                {user.role === "instructor" && (
+                  <button
+                    onClick={() => setShowEditProfileModal(true)}
+                    className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    <UserCog className="h-4 w-4" />
+                    <span>회원정보 수정</span>
+                  </button>
+                )}
                 <div className="flex items-center gap-2 text-sm text-slate-600">
-                  <User className="h-4 w-4" />
+                  {profileImageUrl ? (
+                    <img
+                      src={profileImageUrl}
+                      alt="프로필"
+                      className="h-8 w-8 rounded-full object-cover border border-slate-300 flex-shrink-0"
+                      onError={(e) => {
+                        console.error("[Header] 이미지 로드 실패 - URL:", profileImageUrl.substring(0, 100));
+                        console.error("[Header] 이미지 로드 실패 - 전체 URL 길이:", profileImageUrl.length);
+                        console.error("[Header] 이미지 로드 실패 - 이벤트:", e);
+                        // 이미지 로드 실패 시 User 아이콘으로 대체
+                        setProfileImageUrl(null);
+                      }}
+                      onLoad={() => {
+                        console.log("[Header] ✅ 이미지 로드 성공!");
+                      }}
+                      style={{ display: profileImageUrl ? "block" : "none" }}
+                    />
+                  ) : null}
+                  {!profileImageUrl && <User className="h-4 w-4 flex-shrink-0" />}
                   <span className="font-medium">{user.name || user.id}</span>
                   <span className="text-slate-400">({user.role === "instructor" ? "강사" : "학생"})</span>
                 </div>
@@ -73,6 +134,29 @@ export default function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
                   <LogOut className="h-4 w-4" />
                   <span>로그아웃</span>
                 </button>
+                {user.role === "instructor" && (
+                  <EditProfileModal
+                    isOpen={showEditProfileModal}
+                    onClose={() => setShowEditProfileModal(false)}
+                    token={getToken() || (typeof window !== "undefined" ? localStorage.getItem("instructor_token") : null) || ""}
+                    onSuccess={(data) => {
+                      console.log("[Header] 프로필 수정 성공 - 전체 데이터:", data);
+                      console.log("[Header] 프로필 이미지 URL:", data.profile_image_url ? data.profile_image_url.substring(0, 50) + "..." : "없음");
+                      const u = getUser();
+                      if (u) saveUser({ ...u, name: data.name ?? u.name, email: data.email ?? u.email });
+                      // 프로필 이미지 즉시 업데이트 (서버 응답에서 가져오기)
+                      if (data.profile_image_url && data.profile_image_url.trim()) {
+                        console.log("[Header] 프로필 이미지 URL 즉시 설정");
+                        setProfileImageUrl(data.profile_image_url);
+                      } else {
+                        console.log("[Header] 프로필 이미지 URL 없음 - 다시 불러오기");
+                        // 서버에서 다시 불러오기
+                        setTimeout(() => loadProfileImage(), 500);
+                      }
+                      checkAuth();
+                    }}
+                  />
+                )}
               </>
             ) : (
               <>
