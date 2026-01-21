@@ -15,6 +15,7 @@ except Exception:
 # 간단한 LRU 캐시 (API 비용 절감용)
 _EMBED_CACHE: "OrderedDict[Tuple[str, str], List[float]]" = OrderedDict()
 _EMBED_CACHE_MAX = 512
+_EMBED_CACHE_LOG_ENABLED = True
 
 
 def _cache_get(key: Tuple[str, str]) -> List[float] | None:
@@ -52,25 +53,30 @@ def embed_texts(texts: Iterable[str], settings: AISettings) -> List[List[float]]
 
         # 캐시 확인
         cached_embeddings: List[List[float] | None] = []
-        missing_texts: List[str] = []
-        missing_keys: List[Tuple[str, str]] = []
+        cache_hit_count = 0
+        missing_texts_map: Dict[str, Tuple[str, str]] = {}
         for text in text_list:
             cache_key = (settings.embedding_model, text)
             cached_value = _cache_get(cache_key)
             if cached_value is not None:
                 cached_embeddings.append(cached_value)
+                cache_hit_count += 1
             else:
                 cached_embeddings.append(None)
-                missing_texts.append(text)
-                missing_keys.append(cache_key)
+                if text not in missing_texts_map:
+                    missing_texts_map[text] = cache_key
 
         # 캐시 히트만으로 처리 가능
-        if not missing_texts:
+        if _EMBED_CACHE_LOG_ENABLED and cache_hit_count:
+            print(f"[CACHE HIT] embeddings {cache_hit_count}/{len(text_list)}")
+
+        if not missing_texts_map:
             return [emb for emb in cached_embeddings if emb is not None]
 
         client = OpenAI(api_key=settings.openai_api_key)
 
         # OpenAI embeddings API supports batching; send missing as one request
+        missing_texts = list(missing_texts_map.keys())
         print(f"[DEBUG] [Embeddings] Creating embeddings for {len(missing_texts)} text(s) (API key: {api_key_preview})")
         resp = client.embeddings.create(
             input=missing_texts,
@@ -79,18 +85,18 @@ def embed_texts(texts: Iterable[str], settings: AISettings) -> List[List[float]]
         print(f"[DEBUG] [Embeddings] ✅ Successfully created {len(resp.data)} embeddings")
 
         # 캐시 저장
-        for key, item in zip(missing_keys, resp.data):
-            _cache_set(key, item.embedding)
+        embedding_by_text: Dict[str, List[float]] = {}
+        for text, item in zip(missing_texts, resp.data):
+            embedding_by_text[text] = item.embedding
+            _cache_set(missing_texts_map[text], item.embedding)
 
         # 원래 순서대로 결과 조립
         results: List[List[float]] = []
-        missing_idx = 0
-        for emb in cached_embeddings:
+        for text, emb in zip(text_list, cached_embeddings):
             if emb is not None:
                 results.append(emb)
             else:
-                results.append(resp.data[missing_idx].embedding)
-                missing_idx += 1
+                results.append(embedding_by_text[text])
         return results
     except RateLimitError as e:
         # 더 상세한 에러 정보 출력

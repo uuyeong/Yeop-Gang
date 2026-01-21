@@ -11,6 +11,7 @@ from ai.pipelines.rag import RAGPipeline
 from ai.services.stt import transcribe_video
 from ai.style_analyzer import analyze_instructor_style
 import json
+import hashlib
 
 
 def process_course_assets(
@@ -161,6 +162,9 @@ def process_course_assets(
                 texts.append(transcript_text)
                 print(f"[{course_id}] 📝 {len(segments)}개 자막 세그먼트 인제스트 시작...")
                 total_segments = len(segments)
+                batch_texts = []
+                batch_metas = []
+                batch_size = 20
                 for idx, seg in enumerate(segments):
                     seg_text = seg.get("text", "")
                     if not seg_text:
@@ -176,17 +180,40 @@ def process_course_assets(
                         "end_formatted": seg.get("end_formatted"),
                         "type": "subtitle_segment",
                     }
-                    result = pipeline.ingest_texts(
-                        [seg_text],
-                        course_id=course_id,
-                        metadata=seg_meta,
-                    )
-                    ingested_count += result.get("ingested", 0)
+                    batch_texts.append(seg_text)
+                    batch_metas.append(seg_meta)
                     
                     # 진행률 업데이트 (30% ~ 60%)
                     if update_progress and total_segments > 0:
                         embedding_progress = 30 + int((idx + 1) / total_segments * 30)
                         update_progress(embedding_progress, f"세그먼트 임베딩 중... ({idx + 1}/{total_segments})")
+
+                    # 배치 인제스트
+                    is_last = idx == total_segments - 1
+                    if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                        try:
+                            result = pipeline.ingest_texts_with_metadatas(
+                                batch_texts,
+                                course_id=course_id,
+                                metadatas=batch_metas,
+                            )
+                            ingested_count += result.get("ingested", 0)
+                        except Exception as batch_error:
+                            print(f"[{course_id}] ⚠️ SMI 세그먼트 배치 인제스트 오류: {batch_error}")
+                            for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                try:
+                                    result = pipeline.ingest_texts(
+                                        [retry_text],
+                                        course_id=course_id,
+                                        metadata=retry_meta,
+                                    )
+                                    ingested_count += result.get("ingested", 0)
+                                except Exception as seg_error:
+                                    print(f"[{course_id}] ⚠️ SMI 세그먼트 인제스트 재시도 오류: {seg_error}")
+                                    continue
+                        finally:
+                            batch_texts = []
+                            batch_metas = []
                 print(f"[{course_id}] ✅ 자막 세그먼트 인제스트 완료")
                 if update_progress:
                     update_progress(60, "세그먼트 임베딩 완료")
@@ -205,14 +232,39 @@ def process_course_assets(
                 # 첫 업로드이므로 무조건 STT 실행
                 if update_progress:
                     update_progress(20, "음성 인식(STT) 시작...")
-                print(f"[{course_id}] 🔄 Running STT (force_retranscribe=True)...")
+                # 기존 transcript가 있으면 해시 비교 후 재사용
+                transcript_path = None
+                force_retranscribe = True
+                try:
+                    from core.config import AppSettings
+                    app_settings = AppSettings()
+                    course_dir = app_settings.uploads_dir / instructor_id / course_id
+                    transcript_filename = f"transcript_{media_path.stem}.json"
+                    transcript_file_path = course_dir / transcript_filename
+
+                    if transcript_file_path.exists():
+                        # 파일 해시 계산
+                        file_hash = hashlib.md5(media_path.read_bytes()).hexdigest()
+                        with transcript_file_path.open("r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        saved_hash = data.get("source_hash")
+                        if saved_hash and saved_hash == file_hash:
+                            transcript_path = str(transcript_file_path)
+                            force_retranscribe = False
+                            print(f"[{course_id}] ✅ 기존 transcript 재사용 (해시 일치): {transcript_path}")
+                        else:
+                            print(f"[{course_id}] ⚠️ transcript 해시 불일치 또는 없음, STT 재실행")
+                except Exception as e:
+                    print(f"[{course_id}] ⚠️ transcript 재사용 체크 실패, STT 재실행: {e}")
+
+                print(f"[{course_id}] 🔄 Running STT (force_retranscribe={force_retranscribe})...")
                 transcript_result = transcribe_video(
                     str(media_path),
                     settings=settings,
                     instructor_id=instructor_id,
                     course_id=course_id,
-                    transcript_path=None,  # 기존 파일 무시
-                    force_retranscribe=True  # 강제로 STT 실행
+                    transcript_path=transcript_path,
+                    force_retranscribe=force_retranscribe
                 )
                 transcript_text = transcript_result.get("text", "")
                 segments = transcript_result.get("segments", [])
@@ -256,6 +308,7 @@ def process_course_assets(
                             "source_file": media_path.name,
                             "course_id": course_id,
                             "instructor_id": instructor_id,
+                            "source_hash": hashlib.md5(media_path.read_bytes()).hexdigest(),
                         }
 
                         print(f"[{course_id}] Attempting to save transcript to: {transcript_file_path}")
@@ -284,6 +337,9 @@ def process_course_assets(
                     # 세그먼트별 메타데이터 포함하여 RAG 인제스트
                     print(f"[{course_id}] 📝 {len(segments)}개 세그먼트 인제스트 시작...")
                     total_segments = len(segments)
+                    batch_texts = []
+                    batch_metas = []
+                    batch_size = 20
                     for idx, seg in enumerate(segments):
                         seg_text = seg.get("text", "")
                         if not seg_text:
@@ -299,17 +355,40 @@ def process_course_assets(
                             "type": "video_segment" if video_path else "audio_segment",
                         }
 
-                        result = pipeline.ingest_texts(
-                            [seg_text],
-                            course_id=course_id,
-                            metadata=seg_meta,
-                        )
-                        ingested_count += result.get("ingested", 0)
+                        batch_texts.append(seg_text)
+                        batch_metas.append(seg_meta)
                         
                         # 진행률 업데이트 (40% ~ 70%)
                         if update_progress and total_segments > 0:
                             embedding_progress = 40 + int((idx + 1) / total_segments * 30)
                             update_progress(embedding_progress, f"세그먼트 임베딩 중... ({idx + 1}/{total_segments})")
+
+                        # 배치 인제스트
+                        is_last = idx == total_segments - 1
+                        if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                            try:
+                                result = pipeline.ingest_texts_with_metadatas(
+                                    batch_texts,
+                                    course_id=course_id,
+                                    metadatas=batch_metas,
+                                )
+                                ingested_count += result.get("ingested", 0)
+                            except Exception as batch_error:
+                                print(f"[{course_id}] ⚠️ 세그먼트 배치 인제스트 오류: {batch_error}")
+                                for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                    try:
+                                        result = pipeline.ingest_texts(
+                                            [retry_text],
+                                            course_id=course_id,
+                                            metadata=retry_meta,
+                                        )
+                                        ingested_count += result.get("ingested", 0)
+                                    except Exception as seg_error:
+                                        print(f"[{course_id}] ⚠️ 세그먼트 인제스트 재시도 오류: {seg_error}")
+                                        continue
+                            finally:
+                                batch_texts = []
+                                batch_metas = []
 
                     print(f"[{course_id}] ✅ 세그먼트 인제스트 완료")
                     if update_progress:
@@ -344,6 +423,9 @@ def process_course_assets(
                         # 페이지별로 개별 RAG 인제스트 (페이지 번호 등 메타데이터 포함)
                         print(f"[{course_id}] 🖼️ PDF {len(pdf_texts)}개 페이지 인제스트 시작...")
                         total_pages = len(pdf_texts)
+                        batch_texts = []
+                        batch_metas = []
+                        batch_size = 10
                         for page_idx, (pdf_text, pdf_meta) in enumerate(zip(pdf_texts, pdf_metadata_list)):
                             try:
                                 page_num = pdf_meta.get("page_number")
@@ -361,12 +443,8 @@ def process_course_assets(
                                 }
                                 print(f"[{course_id}] 📄 PDF 페이지 {page_num} 인제스트: {pdf_text[:50]}...")
 
-                                result = pipeline.ingest_texts(
-                                    [pdf_text],
-                                    course_id=course_id,
-                                    metadata=page_meta,
-                                )
-                                ingested_count += result.get("ingested", 0)
+                                batch_texts.append(pdf_text)
+                                batch_metas.append(page_meta)
 
                                 # 진행률 업데이트 (70% ~ 75%)
                                 if update_progress and total_pages > 0:
@@ -376,6 +454,34 @@ def process_course_assets(
                                 print(f"[{course_id}] ⚠️ PDF 페이지 {page_idx + 1} 인제스트 오류: {page_error}")
                                 # 개별 페이지 오류는 건너뛰고 계속 진행
                                 continue
+
+                            # 배치 처리
+                            is_last = page_idx == total_pages - 1
+                            if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                                try:
+                                    result = pipeline.ingest_texts_with_metadatas(
+                                        batch_texts,
+                                        course_id=course_id,
+                                        metadatas=batch_metas,
+                                    )
+                                    ingested_count += result.get("ingested", 0)
+                                except Exception as batch_error:
+                                    print(f"[{course_id}] ⚠️ PDF 배치 인제스트 오류: {batch_error}")
+                                    # 배치 실패 시 페이지 단위로 재시도
+                                    for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                        try:
+                                            result = pipeline.ingest_texts(
+                                                [retry_text],
+                                                course_id=course_id,
+                                                metadata=retry_meta,
+                                            )
+                                            ingested_count += result.get("ingested", 0)
+                                        except Exception as page_error:
+                                            print(f"[{course_id}] ⚠️ PDF 페이지 인제스트 재시도 오류: {page_error}")
+                                            continue
+                                finally:
+                                    batch_texts = []
+                                    batch_metas = []
                         
                         print(f"[{course_id}] ✅ PDF 페이지 인제스트 완료 ({len(pdf_texts)}개 페이지)")
                     else:

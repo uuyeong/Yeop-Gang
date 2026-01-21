@@ -94,6 +94,61 @@ class RAGPipeline:
 
         return {"ingested": len(entries)}
 
+    def ingest_texts_with_metadatas(
+        self,
+        texts: Iterable[str],
+        *,
+        course_id: str,
+        metadatas: List[dict],
+    ) -> dict:
+        """
+        Ingest texts with per-entry metadata (batch).
+        This avoids repeated embedding calls per entry.
+        """
+        entries = list(texts)
+        if not entries:
+            return {"ingested": 0}
+        if len(entries) != len(metadatas):
+            raise ValueError("texts and metadatas length mismatch")
+
+        # Ensure course_id is always present per metadata
+        fixed_metadatas: List[dict] = []
+        for md in metadatas:
+            current_metadata = {**md, "course_id": course_id}
+            fixed_metadatas.append(current_metadata)
+
+        embeddings = embed_texts(entries, self.settings)
+
+        # Generate unique IDs based on metadata
+        ids: List[str] = []
+        for i, md in enumerate(fixed_metadatas):
+            if md.get("segment_index") is not None:
+                doc_id = f"{course_id}-seg-{md['segment_index']}"
+            elif md.get("page_number") is not None:
+                doc_id = f"{course_id}-page-{md['page_number']}"
+            elif md.get("type") == "persona":
+                doc_id = f"{course_id}-persona"
+            else:
+                doc_id = f"{course_id}-doc-{i}"
+            ids.append(doc_id)
+
+        try:
+            self.collection.upsert(
+                ids=ids,
+                documents=entries,
+                metadatas=fixed_metadatas,
+                embeddings=embeddings,
+            )
+        except InvalidDimensionException as e:
+            self._recreate_collection_on_dimension_mismatch(e)
+            return {"ingested": 0, "error": "Collection recreated due to dimension mismatch. Please re-ingest."}
+        except (RateLimitError, APIError) as e:
+            error_msg = f"OpenAI API 오류 (임베딩): {str(e)}"
+            print(f"ERROR [Ingest]: {error_msg}")
+            return {"ingested": 0, "error": error_msg}
+
+        return {"ingested": len(entries)}
+
     def query(
         self, 
         question: str, 

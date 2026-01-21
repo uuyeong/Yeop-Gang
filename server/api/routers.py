@@ -50,6 +50,13 @@ _quiz_cache: Dict[Tuple[str, str, int], Tuple[float, List]] = {}
 _SUMMARY_CACHE_TTL_SECONDS = 300
 _QUIZ_CACHE_TTL_SECONDS = 300
 
+# transcript 캐시 (응답 속도 개선용)
+_transcript_cache: Dict[Tuple[str, bool], Tuple[float, object]] = {}
+_TRANSCRIPT_CACHE_TTL_SECONDS = 120
+
+# 캐시 히트 로그 (효과 측정용)
+_CACHE_LOG_ENABLED = True
+
 
 def _render_math_plain_text(text: str) -> str:
     if not text:
@@ -1987,6 +1994,8 @@ def generate_summary(
         if cached:
             cached_at, cached_summary, cached_key_points = cached
             if time.time() - cached_at < _SUMMARY_CACHE_TTL_SECONDS:
+                if _CACHE_LOG_ENABLED:
+                    print(f"[CACHE HIT] summary course_id={payload.course_id}")
                 return SummaryResponse(
                     course_id=payload.course_id,
                     summary=cached_summary,
@@ -2276,6 +2285,8 @@ def generate_quiz(
         if cached:
             cached_at, cached_questions = cached
             if time.time() - cached_at < _QUIZ_CACHE_TTL_SECONDS:
+                if _CACHE_LOG_ENABLED:
+                    print(f"[CACHE HIT] quiz course_id={payload.course_id} num_questions={num_questions}")
                 return QuizResponse(
                     course_id=payload.course_id,
                     questions=cached_questions,
@@ -2386,6 +2397,25 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
     try:
         # course_id URL 디코딩 (이중 안전장치)
         decoded_course_id = unquote(course_id) if course_id else course_id
+        
+        # transcript 캐시 확인
+        cache_key = (decoded_course_id, return_segments)
+        cached = _transcript_cache.get(cache_key)
+        if cached:
+            cached_at, cached_value = cached
+            if time.time() - cached_at < _TRANSCRIPT_CACHE_TTL_SECONDS:
+                return cached_value  # type: ignore[return-value]
+        
+        # return_segments=False인데, segments 캐시가 있으면 텍스트만 사용
+        if not return_segments:
+            cached_segments = _transcript_cache.get((decoded_course_id, True))
+            if cached_segments:
+                cached_at, cached_value = cached_segments
+                if time.time() - cached_at < _TRANSCRIPT_CACHE_TTL_SECONDS:
+                    if isinstance(cached_value, dict):
+                        text_value = cached_value.get("text")
+                        if text_value:
+                            return text_value  # type: ignore[return-value]
         
         # Course 정보 가져오기
         course = session.get(Course, decoded_course_id)
@@ -2538,10 +2568,13 @@ def _load_transcript_for_course(course_id: str, session: Session, return_segment
         if transcript_text and len(transcript_text.strip()) > 0:
             print(f"✅ Loaded transcript from file for course {decoded_course_id}: {transcript_path} (length: {len(transcript_text)})")
             if return_segments:
-                return {
+                result = {
                     "text": transcript_text,
                     "segments": data.get("segments", [])
                 }
+                _transcript_cache[(decoded_course_id, True)] = (time.time(), result)
+                return result
+            _transcript_cache[(decoded_course_id, False)] = (time.time(), transcript_text)
             return transcript_text
         
         print(f"[TRANSCRIPT DEBUG] Transcript text is empty")
