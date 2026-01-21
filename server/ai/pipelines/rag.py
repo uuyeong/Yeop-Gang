@@ -102,7 +102,8 @@ class RAGPipeline:
         k: int = 4,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         current_time: Optional[float] = None,
-        instructor_info: Optional[Dict[str, Any]] = None
+        instructor_info: Optional[Dict[str, Any]] = None,
+        course_info: Optional[Dict[str, Any]] = None
     ) -> dict:
         """
         Retrieval with course_id filter + LLM synthesis.
@@ -114,7 +115,52 @@ class RAGPipeline:
             k: Number of documents to retrieve
             conversation_history: List of previous messages in format [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
         """
+        # 페이지 번호를 먼저 추출 (벡터 검색 전에)
+        requested_page = None
+        import re
+        question_lower = question.lower().strip()
+        page_patterns = [
+            r'(\d+)\s*(?:page|페이지|번\s*페이지)',  # "4page", "4 페이지", "4번 페이지"
+            r'(?:page|페이지)\s*(\d+)',  # "page 4", "페이지 4"
+            r'(\d+)\s*(?:p|p\.)',  # "4p", "4p."
+        ]
+        for pattern in page_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                requested_page = int(match.group(1))
+                print(f"[RAG DEBUG] 📄 요청된 페이지 번호: {requested_page}")
+                break
+        
         try:
+            # 특정 페이지 요청이 있으면 해당 페이지를 직접 가져오기
+            specific_page_docs = []
+            specific_page_metas = []
+            specific_page_distances = []
+            
+            if requested_page is not None:
+                try:
+                    # ChromaDB에서 특정 페이지 번호를 가진 문서 직접 검색
+                    page_results = self.collection.get(
+                        where={
+                            "$and": [
+                                {"course_id": course_id},
+                                {"type": "pdf_page"},
+                                {"page_number": requested_page}
+                            ]
+                        },
+                        include=["documents", "metadatas"],
+                    )
+                    if page_results.get("documents") and len(page_results["documents"]) > 0:
+                        specific_page_docs = page_results["documents"]
+                        specific_page_metas = page_results.get("metadatas", [])
+                        # get()은 distance를 반환하지 않으므로 0.0으로 설정 (최우선)
+                        specific_page_distances = [0.0] * len(specific_page_docs)
+                        print(f"[RAG DEBUG] ✅ 페이지 {requested_page} 문서 {len(specific_page_docs)}개 직접 검색 성공")
+                    else:
+                        print(f"[RAG DEBUG] ⚠️ 페이지 {requested_page} 문서를 찾지 못했습니다 (get 검색 결과 없음)")
+                except Exception as e:
+                    print(f"[RAG DEBUG] ⚠️ 페이지 {requested_page} 직접 검색 중 오류: {e}")
+            
             # 질문을 임베딩으로 변환 (ingest_texts와 동일한 방식)
             try:
                 query_embeddings = embed_texts([question], self.settings)
@@ -139,9 +185,16 @@ class RAGPipeline:
                     "metadatas": [],
                     "answer": detailed_msg,
                 }
+            # 특정 페이지 요청이 있고 직접 검색에 실패했으면, 더 많은 결과를 가져와서 필터링
+            n_results = k + 1
+            if requested_page is not None and not specific_page_docs:
+                # 특정 페이지를 찾기 위해 더 많은 결과를 가져옴
+                n_results = max(k * 3, 20)  # 최소 20개, 또는 k의 3배
+                print(f"[RAG DEBUG] 📄 특정 페이지 {requested_page}를 찾기 위해 더 많은 결과 검색 (n_results={n_results})")
+            
             results = self.collection.query(
                 query_embeddings=query_embeddings,
-                n_results=k + 1,  # 페르소나 프롬프트 포함을 위해 +1
+                n_results=n_results,  # 페르소나 프롬프트 포함을 위해 +1
                 include=["documents", "metadatas", "distances"],
                 where={"course_id": course_id},
             )
@@ -172,6 +225,46 @@ class RAGPipeline:
         docs: List[str] = docs_all[0] if docs_all else []
         metas: List[Dict[str, Any]] = metas_all[0] if metas_all else []
         distances: List[float] = distances_all[0] if distances_all else []
+        
+        # 특정 페이지 문서가 있으면 벡터 검색 결과 앞에 추가 (최우선)
+        if specific_page_docs:
+            docs = specific_page_docs + docs
+            metas = specific_page_metas + metas
+            distances = specific_page_distances + distances
+            print(f"[RAG DEBUG] 📄 특정 페이지 {requested_page} 문서를 벡터 검색 결과 앞에 추가 (총 {len(docs)}개)")
+        elif requested_page is not None:
+            # 직접 검색에 실패했지만, 벡터 검색 결과에서 해당 페이지를 찾기
+            matching_page_docs = []
+            matching_page_metas = []
+            matching_page_distances = []
+            other_docs = []
+            other_metas = []
+            other_distances = []
+            
+            for doc, meta, dist in zip(docs, metas, distances):
+                page_num = meta.get("page_number")
+                if page_num is not None:
+                    try:
+                        page_num_int = int(page_num) if isinstance(page_num, str) else int(page_num)
+                        if page_num_int == requested_page:
+                            matching_page_docs.append(doc)
+                            matching_page_metas.append(meta)
+                            matching_page_distances.append(dist)
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                other_docs.append(doc)
+                other_metas.append(meta)
+                other_distances.append(dist)
+            
+            if matching_page_docs:
+                # 벡터 검색 결과에서 해당 페이지를 찾았으면 최우선으로 배치
+                docs = matching_page_docs + other_docs
+                metas = matching_page_metas + other_metas
+                distances = matching_page_distances + other_distances
+                print(f"[RAG DEBUG] ✅ 벡터 검색 결과에서 페이지 {requested_page} 문서 {len(matching_page_docs)}개 발견 및 최우선 배치")
+            else:
+                print(f"[RAG DEBUG] ⚠️ 벡터 검색 결과에서도 페이지 {requested_page}를 찾지 못했습니다")
         
         # 디버깅: 검색 결과 로그
         print(f"[RAG DEBUG] Query: '{question[:50]}...' (course_id={course_id})")
@@ -216,52 +309,210 @@ class RAGPipeline:
             print(f"[RAG DEBUG] ⚠️ 페르소나 검색 중 오류 (get 실패): {e}")
             # ⚠️ query_texts를 사용하지 않음 - 불필요한 임베딩 API 호출 방지
         
-        # 검색 결과에서 페르소나 제거 및 시간 기반 필터링/정렬
-        filtered_docs = []
-        filtered_metas = []
-        doc_scores = []  # 시간 기반 점수 (가까울수록 높은 점수)
+        # 페이지 번호 추출 (예: "4page", "4페이지", "page 4", "페이지 4", "4번 페이지" 등)
+        requested_page = None
+        import re
+        question_lower = question.lower().strip()
+        # 숫자 + "page"/"페이지" 패턴 찾기
+        page_patterns = [
+            r'(\d+)\s*(?:page|페이지|번\s*페이지)',  # "4page", "4 페이지", "4번 페이지"
+            r'(?:page|페이지)\s*(\d+)',  # "page 4", "페이지 4"
+            r'(\d+)\s*(?:p|p\.)',  # "4p", "4p."
+        ]
+        for pattern in page_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                requested_page = int(match.group(1))
+                print(f"[RAG DEBUG] 📄 요청된 페이지 번호: {requested_page}")
+                break
+        
+        # 질문 유형 분석: PDF/강의자료 관련 질문인지 확인
+        pdf_related_keywords = [
+            "pdf", "페이지", "page", "강의자료", "교재", "책", "자료",
+            "몇 페이지", "어느 페이지", "페이지 번호", "page number",
+            "그림", "도표", "도형", "그래프", "차트", "표", "이미지",
+            "그림 설명", "도표 설명", "도형 설명", "그래프 설명"
+        ]
+        is_pdf_question = any(keyword in question_lower for keyword in pdf_related_keywords) or requested_page is not None
+        
+        if is_pdf_question:
+            print(f"[RAG DEBUG] 📄 PDF/강의자료 관련 질문으로 감지: '{question[:50]}...'")
+            if requested_page:
+                print(f"[RAG DEBUG] 📄 특정 페이지 요청: {requested_page}페이지")
+        else:
+            print(f"[RAG DEBUG] 🎤 일반 질문으로 감지: '{question[:50]}...'")
+        
+        # 검색 결과에서 페르소나 제거 및 타입별 분리
+        segment_docs = []  # video_segment, audio_segment
+        segment_metas = []
+        segment_scores = []
+        pdf_docs = []  # pdf_page
+        pdf_metas = []
+        pdf_distances = []
         
         for i, doc in enumerate(docs):
             meta = metas[i] if i < len(metas) else {}
-            if meta.get("type") != "persona":
-                # 시간 기반 점수 계산 (current_time이 있는 경우)
+            doc_type = meta.get("type", "")
+            distance = distances[i] if i < len(distances) else 1.0
+            
+            if doc_type == "persona":
+                continue  # 페르소나는 별도로 처리
+            
+            # 타입별로 분리
+            if doc_type == "pdf_page":
+                pdf_docs.append(doc)
+                pdf_metas.append(meta)
+                pdf_distances.append(distance)
+                # 디버깅: PDF 문서의 page_number 확인
+                page_num_debug = meta.get("page_number")
+                print(f"[RAG DEBUG] 📄 PDF 문서 발견: page_number={page_num_debug} (type: {type(page_num_debug).__name__}), source={meta.get('source', 'unknown')}")
+            elif doc_type in ["video_segment", "audio_segment"] or meta.get("start_time") is not None:
+                # 세그먼트인 경우 시간 기반 점수 계산
                 score = 0.0
                 if current_time is not None and current_time > 0:
                     start_time = meta.get("start_time")
                     end_time = meta.get("end_time")
                     if start_time is not None or end_time is not None:
-                        # 현재 시간과의 거리 계산
                         if start_time is not None and end_time is not None:
-                            # segment 범위 내에 있으면 높은 점수
                             if start_time <= current_time <= end_time:
                                 score = 100.0
                             else:
-                                # 거리에 따라 점수 감소
                                 mid_time = (start_time + end_time) / 2
-                                distance = abs(mid_time - current_time)
-                                score = max(0, 100.0 - distance / 10)  # 10초당 10점 감소
+                                distance_time = abs(mid_time - current_time)
+                                score = max(0, 100.0 - distance_time / 10)
                         elif start_time is not None:
-                            distance = abs(start_time - current_time)
-                            score = max(0, 100.0 - distance / 10)
+                            distance_time = abs(start_time - current_time)
+                            score = max(0, 100.0 - distance_time / 10)
                         elif end_time is not None:
-                            distance = abs(end_time - current_time)
-                            score = max(0, 100.0 - distance / 10)
+                            distance_time = abs(end_time - current_time)
+                            score = max(0, 100.0 - distance_time / 10)
                 
-                filtered_docs.append(doc)
-                filtered_metas.append(meta)
-                doc_scores.append(score)
+                segment_docs.append(doc)
+                segment_metas.append(meta)
+                segment_scores.append(score)
         
-        # 시간 기반 점수가 있으면 정렬 (높은 점수부터)
-        if current_time is not None and current_time > 0 and any(s > 0 for s in doc_scores):
-            # 점수와 거리를 함께 고려하여 정렬
-            sorted_items = sorted(
-                zip(filtered_docs, filtered_metas, doc_scores),
+        print(f"[RAG DEBUG] 📊 검색 결과: 세그먼트 {len(segment_docs)}개, PDF {len(pdf_docs)}개")
+        
+        # course_info 로드 (query 메서드에서)
+        if course_info is None:
+            try:
+                from sqlmodel import Session
+                from core.db import engine
+                from core.models import Course
+                
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        course_info = {
+                            "title": course.title,
+                            "category": course.category,
+                        }
+            except Exception as e:
+                print(f"[RAG DEBUG] ⚠️ DB에서 course_info 로드 실패: {e}")
+                course_info = None
+        
+        # 질문 유형에 따라 우선순위 정렬 및 결합
+        filtered_docs = []
+        filtered_metas = []
+        
+        if is_pdf_question:
+            # PDF 질문: PDF 우선, 세그먼트 보조
+            if pdf_docs:
+                # 특정 페이지 요청이 있으면 해당 페이지를 최우선으로 필터링
+                if requested_page is not None:
+                    # 요청된 페이지와 일치하는 문서를 우선적으로 선택
+                    matching_pages = []
+                    other_pages = []
+                    print(f"[RAG DEBUG] 🔍 페이지 {requested_page} 검색 중... (PDF 문서 {len(pdf_docs)}개 확인)")
+                    for doc, meta, dist in zip(pdf_docs, pdf_metas, pdf_distances):
+                        page_num = meta.get("page_number")
+                        # 타입 변환: int, string 모두 비교 가능하도록
+                        page_num_int = None
+                        if page_num is not None:
+                            try:
+                                page_num_int = int(page_num) if isinstance(page_num, str) else int(page_num)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        print(f"[RAG DEBUG] 📄 PDF 문서: page_number={page_num} (type: {type(page_num).__name__}), 요청: {requested_page}")
+                        
+                        if page_num_int == requested_page:
+                            matching_pages.append((doc, meta, dist))
+                            print(f"[RAG DEBUG] ✅ 페이지 {requested_page} 매칭 성공!")
+                        else:
+                            other_pages.append((doc, meta, dist))
+                    
+                    if matching_pages:
+                        # 요청된 페이지를 최우선으로 배치
+                        matching_sorted = sorted(matching_pages, key=lambda x: x[2])  # distance 기준
+                        filtered_docs.extend([doc for doc, _, _ in matching_sorted])
+                        filtered_metas.extend([meta for _, meta, _ in matching_sorted])
+                        print(f"[RAG DEBUG] 📄 요청된 페이지 {requested_page} 문서 {len(matching_pages)}개를 최우선 배치")
+                        
+                        # 나머지 페이지도 추가 (거리순)
+                        if other_pages:
+                            other_sorted = sorted(other_pages, key=lambda x: x[2])
+                            filtered_docs.extend([doc for doc, _, _ in other_sorted])
+                            filtered_metas.extend([meta for _, meta, _ in other_sorted])
+                            print(f"[RAG DEBUG] 📄 다른 페이지 문서 {len(other_pages)}개를 추가 배치")
+                    else:
+                        print(f"[RAG DEBUG] ⚠️ 요청된 페이지 {requested_page}를 찾지 못했습니다. 모든 PDF 문서를 사용합니다.")
+                        # 요청된 페이지가 없으면 기존 로직대로
+                        pdf_sorted = sorted(
+                            zip(pdf_docs, pdf_metas, pdf_distances),
+                            key=lambda x: x[2]
+                        )
+                        filtered_docs.extend([doc for doc, _, _ in pdf_sorted])
+                        filtered_metas.extend([meta for _, meta, _ in pdf_sorted])
+                else:
+                    # 페이지 번호가 없으면 거리순으로 정렬
+                    pdf_sorted = sorted(
+                        zip(pdf_docs, pdf_metas, pdf_distances),
+                        key=lambda x: x[2]  # distance 기준 (낮을수록 좋음)
+                    )
+                    filtered_docs.extend([doc for doc, _, _ in pdf_sorted])
+                    filtered_metas.extend([meta for _, meta, _ in pdf_sorted])
+                print(f"[RAG DEBUG] 📄 PDF 문서를 우선 배치 (총 {len([d for d in filtered_docs if any(m.get('type') == 'pdf_page' for m in filtered_metas[:len(filtered_docs)])])}개)")
+            
+            # 세그먼트는 시간 기반 점수순으로 정렬하여 추가
+            if segment_docs:
+                segment_sorted = sorted(
+                    zip(segment_docs, segment_metas, segment_scores),
+                    key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
+                    reverse=True
+                )
+                filtered_docs.extend([doc for doc, _, _ in segment_sorted])
+                filtered_metas.extend([meta for _, meta, _ in segment_sorted])
+                print(f"[RAG DEBUG] 🎤 세그먼트를 보조로 배치 ({len(segment_docs)}개)")
+        else:
+            # 일반 질문: 세그먼트 우선, PDF 보조
+            # 세그먼트는 시간 기반 점수순으로 정렬
+            if segment_docs:
+                segment_sorted = sorted(
+                    zip(segment_docs, segment_metas, segment_scores),
                 key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
                 reverse=True
             )
-            filtered_docs = [doc for doc, _, _ in sorted_items]
-            filtered_metas = [meta for _, meta, _ in sorted_items]
-            print(f"[RAG DEBUG] 📍 Time-based sorting applied (current_time={current_time}s), top score: {max(doc_scores) if doc_scores else 0:.1f}")
+                filtered_docs.extend([doc for doc, _, _ in segment_sorted])
+                filtered_metas.extend([meta for _, meta, _ in segment_sorted])
+                print(f"[RAG DEBUG] 🎤 세그먼트를 우선 배치 ({len(segment_docs)}개)")
+            
+            # PDF는 거리순으로 정렬하여 추가
+            if pdf_docs:
+                pdf_sorted = sorted(
+                    zip(pdf_docs, pdf_metas, pdf_distances),
+                    key=lambda x: x[2]  # distance 기준 (낮을수록 좋음)
+                )
+                filtered_docs.extend([doc for doc, _, _ in pdf_sorted])
+                filtered_metas.extend([meta for _, meta, _ in pdf_sorted])
+                print(f"[RAG DEBUG] 📄 PDF 문서를 보조로 배치 ({len(pdf_docs)}개)")
+        
+        # 최대 k개만 유지 (너무 많은 문서는 토큰 낭비)
+        max_docs = k if k > 0 else 10
+        if len(filtered_docs) > max_docs:
+            filtered_docs = filtered_docs[:max_docs]
+            filtered_metas = filtered_metas[:max_docs]
+            print(f"[RAG DEBUG] 📝 문서 수 제한: {max_docs}개로 축소")
         
         answer = self._llm_answer(
             question, 
@@ -270,7 +521,10 @@ class RAGPipeline:
             course_id,
             conversation_history=conversation_history,
             persona_doc=persona_doc,  # 명시적으로 페르소나 전달
-            instructor_info=instructor_info  # 강사 정보 전달
+            instructor_info=instructor_info,  # 강사 정보 전달
+            course_info=course_info,  # 강의 정보 전달
+            is_pdf_question=is_pdf_question,  # 질문 유형 전달
+            requested_page=requested_page,  # 요청된 페이지 번호 전달
         )
         return {
             "question": question,
@@ -287,7 +541,10 @@ class RAGPipeline:
         course_id: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         persona_doc: Optional[str] = None,
-        instructor_info: Optional[Dict[str, Any]] = None
+        instructor_info: Optional[Dict[str, Any]] = None,
+        course_info: Optional[Dict[str, Any]] = None,
+        is_pdf_question: bool = False,
+        requested_page: Optional[int] = None,
     ) -> str:
         """
         LLM synthesis with persona prompt and conversation history.
@@ -296,19 +553,71 @@ class RAGPipeline:
         if OpenAI is None or not self.settings.openai_api_key:
             return "LLM placeholder: OPENAI_API_KEY가 없어서 기본 답변을 반환합니다."
 
+        # 컨텍스트 구성: 타입별로 구분하여 명시
         context_parts = []
+        segment_parts = []
+        pdf_parts = []
+        
         for i, doc in enumerate(docs):
             meta = metas[i] if i < len(metas) else {}
             src = meta.get("source") or meta.get("filename") or ""
             ts = meta.get("start_time")
-            ctx = f"[{src} @ {ts}s] {doc}" if ts is not None else doc
+            page_num = meta.get("page_number")
+            doc_type = meta.get("type", "")
+            
+            # 타입별로 분리
+            if doc_type == "pdf_page" or page_num is not None:
+                # PDF 페이지인 경우
+                ctx = f"[강의자료 {src} - 페이지 {page_num}] {doc}"
+                pdf_parts.append(ctx)
+            elif doc_type in ["video_segment", "audio_segment"] or ts is not None:
+                # 오디오/비디오 세그먼트인 경우
+                minutes = int(ts // 60) if ts else 0
+                seconds = int(ts % 60) if ts else 0
+                ctx = f"[강사 설명 {src} @ {minutes}분 {seconds}초] {doc}"
+                segment_parts.append(ctx)
+            else:
+                # 기타
+                ctx = f"[{src}] {doc}" if src else doc
             context_parts.append(ctx)
-        context = "\n".join(context_parts) if context_parts else ""
+        
+        # 질문 유형에 따라 우선순위대로 결합
+        if is_pdf_question:
+            # PDF 질문: PDF 우선, 세그먼트 보조
+            context_parts = pdf_parts + segment_parts + context_parts
+        else:
+            # 일반 질문: 세그먼트 우선, PDF 보조
+            context_parts = segment_parts + pdf_parts + context_parts
+        
+        context = "\n\n".join(context_parts) if context_parts else ""
+
+        # PDF가 없는 경우 경고
+        if not pdf_parts:
+            print(f"[RAG DEBUG] ⚠️ PDF 문서가 검색 결과에 없습니다 (강의자료 미업로드 가능성)")
 
         # DB에서 persona_profile 및 강의 정보 로드 시도 (우선순위 1)
         persona = None
         persona_profile_json = None
-        course_info = None
+        # course_info가 전달되지 않았으면 DB에서 로드
+        if course_info is None:
+            try:
+                from sqlmodel import Session
+                from core.db import engine
+                from core.models import Course
+                
+                with Session(engine) as session:
+                    course = session.get(Course, course_id)
+                    if course:
+                        # 강의 정보 저장 (강의명, 카테고리)
+                        course_info = {
+                            "title": course.title,
+                            "category": course.category,
+                        }
+            except Exception as e:
+                print(f"[RAG DEBUG] ⚠️ DB에서 course_info 로드 실패: {e}")
+                course_info = None
+        
+        # persona_profile 로드
         try:
             from sqlmodel import Session
             from core.db import engine
@@ -316,20 +625,13 @@ class RAGPipeline:
             
             with Session(engine) as session:
                 course = session.get(Course, course_id)
-                if course:
-                    # 강의 정보 저장 (강의명, 카테고리)
-                    course_info = {
-                        "title": course.title,
-                        "category": course.category,
-                    }
-                    
-                    if course.persona_profile:
-                        persona_profile_json = course.persona_profile
-                        import json
-                        persona_dict = json.loads(persona_profile_json)
-                        from ai.style_analyzer import create_persona_prompt
-                        persona = create_persona_prompt(persona_dict)
-                        print(f"[RAG DEBUG] ✅ DB에서 persona_profile 로드 (course_id={course_id})")
+                if course and course.persona_profile:
+                    persona_profile_json = course.persona_profile
+                    import json
+                    persona_dict = json.loads(persona_profile_json)
+                    from ai.style_analyzer import create_persona_prompt
+                    persona = create_persona_prompt(persona_dict)
+                    print(f"[RAG DEBUG] ✅ DB에서 persona_profile 로드 (course_id={course_id})")
         except Exception as e:
             print(f"[RAG DEBUG] ⚠️ DB에서 persona_profile 로드 실패: {e}")
         
@@ -380,17 +682,95 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
 
 """
         
-        # 오디오 지식 우선, GPT 지식 보조 프롬프트
+        # 질문 유형에 따른 검색 전략 명시
         if context:
+            # 타입별 문서 수 계산
+            segment_count = sum(1 for meta in metas if meta.get("type") in ["video_segment", "audio_segment"] or meta.get("start_time"))
+            pdf_count = sum(1 for meta in metas if meta.get("type") == "pdf_page" or meta.get("page_number"))
+            
+            if is_pdf_question:
+                # PDF 관련 질문 전략
+                # 이미지 설명이 포함되어 있는지 확인
+                has_image_descriptions = any("이미지/도표 설명" in doc or "도표 설명" in doc or "그림 설명" in doc for doc in docs)
+                
+                image_instruction = ""
+                if has_image_descriptions:
+                    image_instruction = (
+                        "- **이미지/도표 설명**: 강의 컨텍스트에 '이미지/도표 설명'이라는 형식으로 이미지와 도표에 대한 상세한 설명이 포함되어 있습니다. "
+                        "이 설명은 Vision API를 통해 자동으로 생성된 것이므로, 이를 직접 인용하여 학생에게 설명하세요. "
+                        "'이미지를 직접 분석할 수 없다'고 말하지 마세요. 컨텍스트에 있는 이미지 설명을 그대로 활용하세요.\n"
+                    )
+                
+                search_strategy = (
+                    "**검색 전략**: 이 질문은 강의자료(PDF)에 대한 질문입니다.\n"
+                    "- **우선**: 강의자료의 내용을 먼저 참고하세요.\n"
+                    f"{image_instruction}"
+                    "- **보조**: 강사의 음성 설명도 함께 참고하여 일관성 있게 답변하세요.\n"
+                    "- **중요**: 강사가 강의자료에서 설명하는 내용과 강사 음성 설명을 모두 활용하여 "
+                    "해당 강사의 강의 철학과 내용과 일치하는 답변을 제공하세요.\n"
+                    "- 페이지 번호가 있으면 반드시 명시하세요 (예: \"페이지 X에 나와있는 내용입니다\").\n"
+                    "- **이미지/도표 질문**: 학생이 도표, 그림, 그래프에 대해 물어보면, 컨텍스트에 있는 '이미지/도표 설명'을 찾아서 그 내용을 상세히 설명하세요.\n"
+                )
+            else:
+                # 일반 질문 전략
+                search_strategy = (
+                    "**검색 전략**: 이 질문은 일반 강의 내용에 대한 질문입니다.\n"
+                    "- **우선**: 강사의 음성 설명을 먼저 참고하세요.\n"
+                    "- **보조**: 강의자료(PDF)의 내용도 함께 참고하세요.\n"
+                    "- **중요**: 강사가 설명하는 내용과 강의자료의 내용을 모두 활용하여 "
+                    "해당 강사의 강의 철학과 내용과 일치하는 답변을 제공하세요.\n"
+                    "- 강의자료가 없거나 해당 내용이 강의자료에 없다면 강사 음성 설명만으로 답변하세요.\n"
+                )
+            
+            # 이미지 설명이 포함되어 있는지 확인
+            has_image_descriptions = any("이미지/도표 설명" in doc or "도표 설명" in doc or "그림 설명" in doc for doc in docs)
+            
+            image_note = ""
+            if has_image_descriptions:
+                # 이미지 설명이 포함된 문서 찾기
+                image_doc_count = sum(1 for doc in docs if "이미지/도표 설명" in doc or "도표 설명" in doc or "그림 설명" in doc)
+                image_note = (
+                    f"\n\n**🚨 필수 - 이미지/도표 설명 활용 (총 {image_doc_count}개 문서에 포함됨)**:\n"
+                    "강의 컨텍스트에 '이미지/도표 설명 (페이지 X-Y): ...' 형식으로 이미지와 도표에 대한 상세한 설명이 포함되어 있습니다. "
+                    "이 설명은 Vision API를 통해 자동으로 생성된 것이므로, 학생이 이미지, 도표, 그림, 그래프에 대해 질문하면 "
+                    "반드시 이 설명을 직접 인용하여 상세히 답변하세요.\n\n"
+                    "**절대 하지 말 것**:\n"
+                    "- '이미지를 직접 분석할 수 없다'고 말하지 마세요\n"
+                    "- '이미지를 볼 수 없다'고 말하지 마세요\n"
+                    "- '이미지를 직접 확인할 수 없다'고 말하지 마세요\n\n"
+                    "**반드시 해야 할 것**:\n"
+                    "- 컨텍스트에 있는 '이미지/도표 설명'을 찾아서 그 내용을 그대로 인용하세요\n"
+                    "- 페이지 번호가 있으면 반드시 명시하세요 (예: '페이지 22에 나와있는 도형은...')\n"
+                    "- 이미지 설명의 내용을 상세히 설명하세요\n"
+                )
+            else:
+                # 이미지 설명이 없어도 PDF 질문이면 명시
+                if is_pdf_question:
+                    image_note = (
+                        "\n\n**참고**: 강의 컨텍스트에 이미지/도표 설명이 포함되어 있지 않을 수 있습니다. "
+                        "하지만 PDF 텍스트 내용을 바탕으로 도표나 그림에 대한 정보를 제공할 수 있습니다.\n"
+                    )
+            
             knowledge_instruction = (
                 "**중요**: 아래 '강의 컨텍스트'에 있는 내용만 답변하세요. "
                 "강의 컨텍스트에서 답을 찾으세요. "
                 "강의 컨텍스트에 명확한 답이 있으면 그대로 사용하세요. "
                 "강의 컨텍스트에 없는 내용은 답변하지 마세요.\n\n"
-                "강의 컨텍스트:\n"
+                f"{search_strategy}\n"
+                f"{image_note}"
+                "**강의 컨텍스트**:\n"
                 f"{context}\n\n"
                 "위 강의 컨텍스트를 바탕으로 질문에 답변하세요. "
-                "강의 내용을 직접 인용하거나 요약하여 답변하세요."
+                "강의 내용을 직접 인용하거나 요약하여 답변하세요. "
+                "컨텍스트의 출처(강사 설명 또는 강의자료 페이지)를 구분하여 활용하세요. "
+                "이미지/도표 설명이 포함되어 있으면 반드시 활용하여 답변하세요.\n\n"
+                "**수학 공식 표현 규칙**:\n"
+                "- 수학 공식이나 수식을 표현할 때는 LaTeX 문법(예: \\(, \\), \\[, \\])을 사용하지 마세요.\n"
+                "- 대신 일반 텍스트로 읽기 쉽게 표현하세요.\n"
+                "- 예시: 'y^2 = 4px' (y의 제곱은 4px와 같다), 'x^2 + y^2 = r^2' (x의 제곱 더하기 y의 제곱은 r의 제곱과 같다)\n"
+                "- 분수는 'a/b' 형식으로 표현하세요 (예: '1/2', '3/4').\n"
+                "- 제곱근은 '√(수식)' 형식으로 표현하세요 (예: '√2', '√(x+1)').\n"
+                "- 모든 수학 기호와 공식을 한글로 설명하거나 일반 텍스트로 표현하여 읽기 쉽게 만들어주세요."
             )
         else:
             knowledge_instruction = (
@@ -501,7 +881,12 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
             "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
             "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
             "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 카테고리를 자연스럽게 답변하세요.\n"
-            "- **정체성 인식**: 당신은 위에 명시된 주제(예: 영어, 수학 등)를 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/카테고리에 명시된 주제의 선생님으로서 답변하세요. 예를 들어, 강의명이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 고전 시가를 읽는 수업이어도 당신은 영어 선생님으로서 답변하세요."
+            "- **정체성 인식**: 당신은 위에 명시된 주제(예: 영어, 수학 등)를 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/카테고리에 명시된 주제의 선생님으로서 답변하세요. 예를 들어, 강의명이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 고전 시가를 읽는 수업이어도 당신은 영어 선생님으로서 답변하세요.\n"
+            "- **수학 공식 표현**: 수학 공식이나 수식을 표현할 때는 LaTeX 문법(예: \\(, \\), \\[, \\])을 절대 사용하지 마세요. 대신 일반 텍스트로 읽기 쉽게 표현하세요.\n"
+            "  * 예시: 'y^2 = 4px' (y의 제곱은 4px와 같다), 'x^2 + y^2 = r^2' (x의 제곱 더하기 y의 제곱은 r의 제곱과 같다)\n"
+            "  * 분수는 'a/b' 형식으로 표현 (예: '1/2', '3/4')\n"
+            "  * 제곱근은 '√(수식)' 형식으로 표현 (예: '√2', '√(x+1)')\n"
+            "  * 모든 수학 기호와 공식을 한글로 설명하거나 일반 텍스트로 표현하여 읽기 쉽게 만들어주세요."
         )
 
         # 메시지 구성 (대화 히스토리 포함)

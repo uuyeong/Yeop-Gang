@@ -328,12 +328,14 @@ def process_course_assets(
                 if update_progress:
                     update_progress(70, "PDF 처리 시작...")
                 print(f"[{course_id}] 📄 PDF 멀티모달 처리 시작: {pdf_path.name}")
+                print(f"[{course_id}] 📄 이미지 추출 활성화: extract_images=True")
                 # PDF 처리 모듈이 있으면 사용, 없으면 스킵
                 try:
                     from ai.services.pdf import extract_pdf_content
                     pdf_result = extract_pdf_content(str(pdf_path), settings=settings, extract_images=True)
                     pdf_texts = pdf_result.get("texts", [])
                     pdf_metadata_list = pdf_result.get("metadata", [])
+                    print(f"[{course_id}] 📄 PDF 처리 완료: {len(pdf_texts)}개 페이지 추출됨")
                     
                     if pdf_texts:
                         # PDF 텍스트를 persona 생성용 샘플에 추가
@@ -343,32 +345,52 @@ def process_course_assets(
                         print(f"[{course_id}] 🖼️ PDF {len(pdf_texts)}개 페이지 인제스트 시작...")
                         total_pages = len(pdf_texts)
                         for page_idx, (pdf_text, pdf_meta) in enumerate(zip(pdf_texts, pdf_metadata_list)):
-                            page_meta = {
-                                "course_id": course_id,
-                                "instructor_id": instructor_id,
-                                "source": pdf_path.name,
-                                "page_number": pdf_meta.get("page_number"),
-                                "type": "pdf_page",
-                            }
-                            
-                            result = pipeline.ingest_texts(
-                                [pdf_text],
-                                course_id=course_id,
-                                metadata=page_meta,
-                            )
-                            ingested_count += result.get("ingested", 0)
-                            
-                            # 진행률 업데이트 (70% ~ 75%)
-                            if update_progress and total_pages > 0:
-                                pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
-                                update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
+                            try:
+                                page_num = pdf_meta.get("page_number")
+                                if page_num is None:
+                                    # pdf_meta에 page_number가 없으면 page_idx + 1 사용
+                                    page_num = page_idx + 1
+                                    print(f"[{course_id}] ⚠️ PDF 메타데이터에 page_number가 없어서 {page_num}로 설정")
+
+                                page_meta = {
+                                    "course_id": course_id,
+                                    "instructor_id": instructor_id,
+                                    "source": pdf_path.name,
+                                    "page_number": page_num,  # 명시적으로 int로 저장
+                                    "type": "pdf_page",
+                                }
+                                print(f"[{course_id}] 📄 PDF 페이지 {page_num} 인제스트: {pdf_text[:50]}...")
+
+                                result = pipeline.ingest_texts(
+                                    [pdf_text],
+                                    course_id=course_id,
+                                    metadata=page_meta,
+                                )
+                                ingested_count += result.get("ingested", 0)
+
+                                # 진행률 업데이트 (70% ~ 75%)
+                                if update_progress and total_pages > 0:
+                                    pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
+                                    update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
+                            except Exception as page_error:
+                                print(f"[{course_id}] ⚠️ PDF 페이지 {page_idx + 1} 인제스트 오류: {page_error}")
+                                # 개별 페이지 오류는 건너뛰고 계속 진행
+                                continue
                         
-                        print(f"[{course_id}] ✅ PDF 페이지 인제스트 완료")
+                        print(f"[{course_id}] ✅ PDF 페이지 인제스트 완료 ({len(pdf_texts)}개 페이지)")
                     else:
                         print(f"[{course_id}] ⚠️ PDF에서 텍스트를 추출하지 못했습니다: {pdf_path.name}")
+                        # PDF 텍스트가 없어도 계속 진행
                 except ImportError:
                     print(f"[{course_id}] ⚠️ PDF 처리 모듈이 없습니다. PDF 처리를 건너뜁니다.")
                     # PDF 처리 모듈이 없어도 계속 진행
+                except Exception as pdf_error:
+                    # PDF 처리 중 치명적 오류 발생 시에도 계속 진행
+                    error_msg = f"[{course_id}] ⚠️ PDF 처리 중 오류 발생: {str(pdf_error)}"
+                    print(error_msg)
+                    import traceback
+                    print(f"[{course_id}] PDF 오류 상세: {traceback.format_exc()}")
+                    # PDF 처리는 실패했지만 나머지 처리 계속 진행
                         
             except Exception as e:
                 error_msg = f"[{course_id}] ❌ PDF 처리 오류 ({pdf_path.name}): {str(e)}"
@@ -410,7 +432,7 @@ def process_course_assets(
                 else:
                     # 기존 방식 (fallback) - 강사 정보는 포함하지 않음 (DB에서 동적으로 로드)
                     persona_prompt = pipeline.generate_persona_prompt(
-                        course_id=course_id, 
+                        course_id=course_id,
                         sample_texts=texts,
                         instructor_info=None  # ChromaDB에 저장하지 않음
                     )

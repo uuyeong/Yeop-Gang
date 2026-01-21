@@ -30,7 +30,7 @@ def _prepare_sqlite_url(url: str) -> str:
             file_path = Path(path[1:])
     else:
         file_path = Path(path)
-    
+
     # 상대 경로 처리 (./data/yeopgang.db -> server/data/yeopgang.db)
     if not file_path.is_absolute():
         # ./data/yeopgang.db -> data/yeopgang.db로 정규화

@@ -1,7 +1,7 @@
 # dh: 이 파일은 기존 호환성을 위해 유지됩니다.
 # dh: 새로운 보안 기능이 포함된 API는 server/api/dh_routers.py를 사용하세요.
 
-from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, Request, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, Request, HTTPException, Query
 from fastapi.params import Form, File
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlmodel import Session, select
@@ -1113,7 +1113,8 @@ def ask(
             conversation_id=conversation_id,
             course_id=payload.course_id,
         )
-    
+
+
     # 대화 히스토리 관련 질문
     history_question_keywords = [
         "방금 한 말", "방금 말한", "방금 말씀", "방금 한 말씀",
@@ -1217,11 +1218,20 @@ def ask(
                 course_id=payload.course_id,
             )
     
+    # 질문 유형 분석: PDF/강의자료 관련 질문인지 확인
+    question_lower_for_type = payload.question.lower().strip()
+    pdf_related_keywords = [
+        "pdf", "페이지", "page", "강의자료", "교재", "책", "자료",
+        "몇 페이지", "어느 페이지", "페이지 번호", "page number",
+        "그림", "도표", "도형", "그래프", "차트", "표", "이미지",
+        "그림 설명", "도표 설명", "도형 설명", "그래프 설명"
+    ]
+    is_pdf_question = any(keyword in question_lower_for_type for keyword in pdf_related_keywords)
+    
     # "이해가 안가요", "지금 말하는 부분", "방금 말씀" 같은 질문이면 해당 시간대 transcript 우선 사용
+    # 단, PDF 관련 질문이면 transcript를 우선하지 않음 (PDF를 찾아야 함)
     use_transcript_first = False
-    if payload.current_time is not None and payload.current_time > 0:
-        question_lower = payload.question.lower()
-        
+    if not is_pdf_question and payload.current_time is not None and payload.current_time > 0:
         # 시간/맥락 관련 키워드
         recent_keywords = [
             "방금", "지금", "현재", "이 부분", "여기", "지금 이", "방금 전",
@@ -1230,19 +1240,25 @@ def ask(
         # 이해 관련 키워드
         understanding_keywords = ["이해", "모르겠", "다시", "설명", "어려워", "어렵", "무엇", "뭐", "뭔지"]
         
-        has_recent_keyword = any(keyword in question_lower for keyword in recent_keywords)
-        has_understanding_keyword = any(kw in question_lower for kw in understanding_keywords)
+        has_recent_keyword = any(keyword in question_lower_for_type for keyword in recent_keywords)
+        has_understanding_keyword = any(kw in question_lower_for_type for kw in understanding_keywords)
         
         # 시간/맥락 키워드가 있거나, 이해 관련 키워드와 함께 현재 시간 정보가 있는 경우
         # 특히 "지금 말하는 부분이 이해가 안가요" 같은 질문 감지
         use_transcript_first = has_recent_keyword or (has_understanding_keyword and payload.current_time > 0)
     
+    if is_pdf_question:
+        print(f"[CHAT DEBUG] 📄 PDF/강의자료 관련 질문으로 감지: '{payload.question[:50]}...'")
+    
     try:
+        # answer 변수 초기화 (모든 경로에서 반환되도록 보장)
+        answer = ""
+        sources = []
+        
         # 시간대 기반 질문이면 transcript를 먼저 사용
         result = None
         if use_transcript_first:
             use_transcript = True
-            answer = ""
             docs = []
             metas = []
         else:
@@ -1811,11 +1827,88 @@ def ask(
                 context=f"오류: {error_msg[:200]}"
             )
         
+        # answer가 None이거나 빈 문자열인 경우 기본값 사용
+        if not answer or not answer.strip():
+            answer = "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
+        
         return ChatResponse(
             answer=answer,
             sources=[],
             conversation_id=conversation_id,
             course_id=payload.course_id,
+        )
+
+
+@router.get("/chat/greeting", response_model=ChatResponse)
+def get_greeting(
+    course_id: str = Query(..., description="강의 ID"),
+    pipeline: RAGPipeline = Depends(get_pipeline),
+    session: Session = Depends(get_session),
+) -> ChatResponse:
+    """
+    강사 페르소나 기반 초기 인사말 생성
+    """
+    from urllib.parse import unquote
+    original_course_id = course_id  # 원본 저장 (예외 처리용)
+    
+    try:
+        # URL 디코딩
+        try:
+            course_id = unquote(course_id)
+        except Exception as decode_error:
+            print(f"[GREETING] ⚠️ URL 디코딩 실패 (원본 사용): {decode_error}")
+            # 디코딩 실패 시 원본 사용
+            course_id = original_course_id
+        
+        if not course_id or not course_id.strip():
+            raise ValueError("course_id가 비어있습니다.")
+        
+        # 강의 정보 및 강사 정보 가져오기
+        instructor_info = None
+        course_info = None
+        course = session.get(Course, course_id)
+        if course:
+            course_info = {
+                "title": course.title,
+                "category": course.category,
+            }
+            instructor = session.get(Instructor, course.instructor_id)
+            if instructor:
+                instructor_info = {
+                    "name": instructor.name,
+                    "bio": instructor.bio,
+                    "specialization": instructor.specialization,
+                }
+        
+        # 페르소나 기반 인사말 생성
+        greeting_message = _generate_persona_response(
+            user_message="학생이 처음 챗봇을 시작했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요. 강사의 말투와 특징을 잘 살려서 인사해주세요.",
+            course_id=course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=None
+        )
+        
+        # greeting_message가 None이거나 빈 문자열인 경우 기본값 사용
+        if not greeting_message or not greeting_message.strip():
+            greeting_message = "안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요."
+        
+        return ChatResponse(
+            answer=greeting_message,
+            sources=[],
+            conversation_id=None,
+            course_id=course_id,
+        )
+    except Exception as e:
+        print(f"[GREETING] ❌ 오류: {e}")
+        import traceback
+        print(f"[GREETING] Traceback: {traceback.format_exc()}")
+        # 오류 발생 시 기본 인사말 반환 (원본 course_id 사용)
+        return ChatResponse(
+            answer="안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요.",
+            sources=[],
+            conversation_id=None,
+            course_id=original_course_id,  # 원본 사용
         )
 
 

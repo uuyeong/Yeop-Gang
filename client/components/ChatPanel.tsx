@@ -3,7 +3,7 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { AlertCircle } from "lucide-react";
 import type { ChatMessage } from "../lib/types";
-import { API_BASE_URL, apiPost, handleApiError } from "../lib/api";
+import { API_BASE_URL, apiPost, apiGet, handleApiError } from "../lib/api";
 
 type Props = {
   courseId: string;
@@ -14,18 +14,59 @@ type Props = {
 };
 
 export default function ChatPanel({ courseId, courseTitle, instructorName, onTimestampClick, currentTime }: Props) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content: `안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요.`,
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<{ message: string; retryQuestion?: string } | null>(null);
   const [conversationId] = useState(() => `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [greetingLoaded, setGreetingLoaded] = useState(false);
+
+  // 초기 인사말 로드
+  useEffect(() => {
+    const loadGreeting = async () => {
+      if (greetingLoaded) return;
+      
+      try {
+        const encodedCourseId = encodeURIComponent(courseId);
+        const data = await apiGet<{ answer: string }>(
+          `/api/chat/greeting?course_id=${encodedCourseId}`
+        );
+        
+        if (data.answer) {
+          setMessages([
+            {
+              role: "assistant",
+              content: data.answer,
+            },
+          ]);
+          setGreetingLoaded(true);
+        } else {
+          // API 실패 시 기본 인사말 사용
+          setMessages([
+            {
+              role: "assistant",
+              content: `안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요.`,
+            },
+          ]);
+          setGreetingLoaded(true);
+        }
+      } catch (error) {
+        // API 실패 시 기본 인사말 사용
+        console.error("Failed to load greeting:", error);
+        setMessages([
+          {
+            role: "assistant",
+            content: `안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요.`,
+          },
+        ]);
+        setGreetingLoaded(true);
+      }
+    };
+
+    loadGreeting();
+  }, [courseId, greetingLoaded]);
 
   const handleSend = async (question?: string) => {
     const trimmed = question || input.trim();
