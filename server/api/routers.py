@@ -6,9 +6,11 @@ from fastapi.params import Form, File
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlmodel import Session, select
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import os
 import re
+import time
+import hashlib
 
 from ai.pipelines.rag import RAGPipeline
 from api.schemas import (
@@ -37,6 +39,36 @@ from core.dh_auth import (
     create_access_token,
 )
 from ai.config import AISettings
+
+# 인사말 캐시 (API 비용 절감용)
+_greeting_cache: Dict[str, Tuple[float, str]] = {}
+_GREETING_CACHE_TTL_SECONDS = 300
+
+# 요약/퀴즈 캐시 (API 비용 절감용)
+_summary_cache: Dict[Tuple[str, str], Tuple[float, str, List[str]]] = {}
+_quiz_cache: Dict[Tuple[str, str, int], Tuple[float, List]] = {}
+_SUMMARY_CACHE_TTL_SECONDS = 300
+_QUIZ_CACHE_TTL_SECONDS = 300
+
+
+def _render_math_plain_text(text: str) -> str:
+    if not text:
+        return text
+
+    rendered = text
+    # LaTeX 블록 제거
+    rendered = rendered.replace("\\(", "").replace("\\)", "")
+    rendered = rendered.replace("\\[", "").replace("\\]", "")
+    rendered = rendered.replace("\\,", " ")
+    # 텍스트 매크로 처리
+    rendered = re.sub(r"\\text\{([^}]*)\}", r"\1", rendered)
+    # 분수/루트 처리
+    rendered = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r"\1 / \2", rendered)
+    rendered = re.sub(r"\\sqrt\{([^{}]+)\}", r"√(\1)", rendered)
+    # 곱셈 처리
+    rendered = rendered.replace("\\times", "x").replace("\\cdot", "x")
+
+    return rendered
 
 router = APIRouter(prefix="", tags=["api"])
 
@@ -257,14 +289,15 @@ def _generate_persona_response(
             max_tokens=500,
         )
         
-        return response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
+        raw_response = response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
+        return _render_math_plain_text(raw_response)
         
     except Exception as e:
         print(f"[PERSONA RESPONSE] ❌ 오류: {e}")
         import traceback
         print(f"[PERSONA RESPONSE] Traceback: {traceback.format_exc()}")
         # 오류 발생 시 기본 응답 (페르소나 없이)
-        return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
+        return _render_math_plain_text("죄송합니다. 답변을 생성하는 중 오류가 발생했습니다.")
 
 
 def _serve_video_file(file_path: Path, media_type: str):
@@ -1799,6 +1832,7 @@ def ask(
         if result is not None:
             sources = [str(src) for src in result.get("documents", [])]
         
+        answer = _render_math_plain_text(answer)
         return ChatResponse(
             answer=answer,
             sources=sources,
@@ -1831,6 +1865,7 @@ def ask(
         if not answer or not answer.strip():
             answer = "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
         
+        answer = _render_math_plain_text(answer)
         return ChatResponse(
             answer=answer,
             sources=[],
@@ -1863,6 +1898,18 @@ def get_greeting(
         if not course_id or not course_id.strip():
             raise ValueError("course_id가 비어있습니다.")
         
+        # 캐시된 인사말 확인
+        cached = _greeting_cache.get(course_id)
+        if cached:
+            cached_at, cached_message = cached
+            if time.time() - cached_at < _GREETING_CACHE_TTL_SECONDS:
+                return ChatResponse(
+                    answer=cached_message,
+                    sources=[],
+                    conversation_id=None,
+                    course_id=course_id,
+                )
+
         # 강의 정보 및 강사 정보 가져오기
         instructor_info = None
         course_info = None
@@ -1892,7 +1939,11 @@ def get_greeting(
         # greeting_message가 None이거나 빈 문자열인 경우 기본값 사용
         if not greeting_message or not greeting_message.strip():
             greeting_message = "안녕하세요! 강의에 대해 궁금한 점이 있으시면 언제든지 질문해 주세요."
+
+        greeting_message = _render_math_plain_text(greeting_message)
         
+        _greeting_cache[course_id] = (time.time(), greeting_message)
+
         return ChatResponse(
             answer=greeting_message,
             sources=[],
@@ -1927,8 +1978,21 @@ def generate_summary(
     
     # 저장된 transcript 파일 찾기
     transcript_text = _load_transcript_for_course(payload.course_id, session)
+    cache_key = None
     
     if transcript_text:
+        digest = hashlib.md5(transcript_text.encode("utf-8")).hexdigest()
+        cache_key = (payload.course_id, digest)
+        cached = _summary_cache.get(cache_key)
+        if cached:
+            cached_at, cached_summary, cached_key_points = cached
+            if time.time() - cached_at < _SUMMARY_CACHE_TTL_SECONDS:
+                return SummaryResponse(
+                    course_id=payload.course_id,
+                    summary=cached_summary,
+                    key_points=cached_key_points[:10],
+                )
+
         # 저장된 STT 결과물을 직접 사용
         summary_prompt = (
             f"다음은 강의 전사 내용입니다. 이 강의의 핵심 내용을 **마크다운 형식**으로 전문적이고 시각적으로 잘 정리된 요약노트를 작성해주세요.\n\n"
@@ -2179,6 +2243,10 @@ def generate_summary(
         # HTML 태그 제거
         key_points = [re.sub(r'<[^>]+>', '', point).strip() for point in key_points if point]
     
+    # 캐시 저장 (transcript 기반 요약만)
+    if cache_key:
+        _summary_cache[cache_key] = (time.time(), answer, key_points[:10])
+
     return SummaryResponse(
         course_id=payload.course_id,
         summary=answer,
@@ -2199,8 +2267,21 @@ def generate_quiz(
     
     # 저장된 transcript 파일 찾기
     transcript_text = _load_transcript_for_course(payload.course_id, session)
+    cache_key = None
     
     if transcript_text:
+        digest = hashlib.md5(transcript_text.encode("utf-8")).hexdigest()
+        cache_key = (payload.course_id, digest, num_questions)
+        cached = _quiz_cache.get(cache_key)
+        if cached:
+            cached_at, cached_questions = cached
+            if time.time() - cached_at < _QUIZ_CACHE_TTL_SECONDS:
+                return QuizResponse(
+                    course_id=payload.course_id,
+                    questions=cached_questions,
+                    quiz_id=f"quiz-{payload.course_id}-{int(__import__('time').time())}",
+                )
+
         # 저장된 STT 결과물을 직접 사용
         quiz_prompt = (
             f"다음은 강의 전사 내용입니다. 이 강의 내용을 바탕으로 객관식 퀴즈 {num_questions}문제를 만들어주세요.\n\n"
@@ -2272,6 +2353,10 @@ def generate_quiz(
     
     # 퀴즈 파싱
     questions = _parse_quiz_from_text(answer, num_questions)
+
+    # 캐시 저장 (transcript 기반 퀴즈만)
+    if cache_key:
+        _quiz_cache[cache_key] = (time.time(), questions)
     
     return QuizResponse(
         course_id=payload.course_id,
