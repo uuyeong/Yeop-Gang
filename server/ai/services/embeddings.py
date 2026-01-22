@@ -74,7 +74,7 @@ def embed_texts(texts: Iterable[str], settings: AISettings) -> List[List[float]]
             return [emb for emb in cached_embeddings if emb is not None]
 
         client = OpenAI(api_key=settings.openai_api_key)
-
+    
         # OpenAI embeddings API supports batching; send missing as one request
         missing_texts = list(missing_texts_map.keys())
         print(f"[DEBUG] [Embeddings] Creating embeddings for {len(missing_texts)} text(s) (API key: {api_key_preview})")

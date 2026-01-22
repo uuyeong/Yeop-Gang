@@ -445,7 +445,7 @@ def process_course_assets(
 
                                 batch_texts.append(pdf_text)
                                 batch_metas.append(page_meta)
-
+                                
                                 # 진행률 업데이트 (70% ~ 75%)
                                 if update_progress and total_pages > 0:
                                     pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
