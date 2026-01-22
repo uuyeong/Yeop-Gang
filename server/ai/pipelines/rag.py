@@ -967,7 +967,47 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
                 messages=messages,
                 temperature=0.3,
             )
-            return resp.choices[0].message.content
+            answer = resp.choices[0].message.content or ""
+            
+            # 맞춤법 검사 적용 (순환 import 방지: 직접 import)
+            try:
+                from hanspell import spell_checker
+                # 텍스트가 너무 길면 분할하여 처리
+                if len(answer) <= 500:
+                    result = spell_checker.check(answer)
+                    answer = result.checked
+                else:
+                    # 긴 텍스트는 문장 단위로 분할하여 검사
+                    import re
+                    sentences = re.split(r'([.!?。！？]\s*)', answer)
+                    corrected_parts = []
+                    current_chunk = ""
+                    for part in sentences:
+                        if len(current_chunk) + len(part) <= 500:
+                            current_chunk += part
+                        else:
+                            if current_chunk.strip():
+                                try:
+                                    result = spell_checker.check(current_chunk)
+                                    corrected_parts.append(result.checked)
+                                except Exception:
+                                    corrected_parts.append(current_chunk)
+                            current_chunk = part
+                    if current_chunk.strip():
+                        try:
+                            result = spell_checker.check(current_chunk)
+                            corrected_parts.append(result.checked)
+                        except Exception:
+                            corrected_parts.append(current_chunk)
+                    answer = "".join(corrected_parts)
+            except ImportError:
+                # py-hanspell이 설치되지 않은 경우 원본 반환
+                print("[RAG Spell Check] ⚠️ py-hanspell이 설치되지 않아 맞춤법 검사를 건너뜁니다.")
+            except Exception as e:
+                print(f"[RAG Spell Check] ⚠️ 맞춤법 검사 오류: {e}")
+                # 오류 시 원본 반환
+            
+            return answer
         except RateLimitError as e:
             error_msg = f"OpenAI API 할당량이 초과되었습니다: {str(e)}"
             print(f"ERROR [LLM]: {error_msg}")
