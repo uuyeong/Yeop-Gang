@@ -59,6 +59,70 @@ _TRANSCRIPT_CACHE_TTL_SECONDS = 120
 _CACHE_LOG_ENABLED = True
 
 
+def _check_spelling(text: str) -> str:
+    """
+    한국어 맞춤법 검사 및 수정
+    
+    Args:
+        text: 검사할 텍스트
+        
+    Returns:
+        맞춤법이 수정된 텍스트
+    """
+    if not text or not text.strip():
+        return text
+    
+    try:
+        from hanspell import spell_checker
+        
+        # 텍스트가 너무 길면 분할하여 처리 (한 번에 500자 이하로)
+        max_length = 500
+        if len(text) <= max_length:
+            # 짧은 텍스트는 바로 검사
+            result = spell_checker.check(text)
+            return result.checked
+        else:
+            # 긴 텍스트는 문장 단위로 분할하여 검사
+            # 문장 구분자: 마침표, 느낌표, 물음표
+            sentences = re.split(r'([.!?。！？]\s*)', text)
+            corrected_parts = []
+            
+            current_chunk = ""
+            for part in sentences:
+                if len(current_chunk) + len(part) <= max_length:
+                    current_chunk += part
+                else:
+                    # 현재 청크 검사
+                    if current_chunk.strip():
+                        try:
+                            result = spell_checker.check(current_chunk)
+                            corrected_parts.append(result.checked)
+                        except Exception as e:
+                            print(f"[Spell Check] ⚠️ 맞춤법 검사 오류 (청크): {e}")
+                            corrected_parts.append(current_chunk)  # 오류 시 원본 유지
+                    current_chunk = part
+            
+            # 마지막 청크 검사
+            if current_chunk.strip():
+                try:
+                    result = spell_checker.check(current_chunk)
+                    corrected_parts.append(result.checked)
+                except Exception as e:
+                    print(f"[Spell Check] ⚠️ 맞춤법 검사 오류 (마지막 청크): {e}")
+                    corrected_parts.append(current_chunk)  # 오류 시 원본 유지
+            
+            return "".join(corrected_parts)
+            
+    except ImportError:
+        # py-hanspell이 설치되지 않은 경우 원본 반환
+        print("[Spell Check] ⚠️ py-hanspell이 설치되지 않아 맞춤법 검사를 건너뜁니다.")
+        return text
+    except Exception as e:
+        # 맞춤법 검사 실패 시 원본 반환
+        print(f"[Spell Check] ⚠️ 맞춤법 검사 오류: {e}")
+        return text
+
+
 def _render_math_plain_text(text: str) -> str:
     if not text:
         return text
@@ -298,7 +362,10 @@ def _generate_persona_response(
         )
         
         raw_response = response.choices[0].message.content or "죄송합니다. 답변을 생성할 수 없었습니다."
-        return _render_math_plain_text(raw_response)
+        # 맞춤법 검사 적용
+        corrected_response = _check_spelling(raw_response)
+        # 수학 공식 렌더링 적용
+        return _render_math_plain_text(corrected_response)
         
     except Exception as e:
         print(f"[PERSONA RESPONSE] ❌ 오류: {e}")
@@ -1845,6 +1912,9 @@ def ask(
         if result is not None:
             sources = [str(src) for src in result.get("documents", [])]
         
+        # 맞춤법 검사 적용 (최종 응답 반환 전)
+        answer = _check_spelling(answer)
+        # 수학 공식 렌더링 적용
         answer = _render_math_plain_text(answer)
         return ChatResponse(
             answer=answer,

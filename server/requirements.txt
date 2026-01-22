@@ -41,6 +41,9 @@ pydub==0.25.1
 pymupdf==1.24.0
 Pillow==10.4.0
 
+# 한국어 맞춤법 검사
+py-hanspell==4.0.5
+
 # 참고사항:
 # - langchain-openai 0.2.6 requires openai>=1.54.0,<2.0.0
 # - ffmpeg는 시스템에 별도 설치 필요 (Whisper STT 사용 시)
