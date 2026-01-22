@@ -780,14 +780,14 @@ def delete_course(course_id: str, session: Session = Depends(get_session)) -> di
     from ai.config import AISettings
     from ai.services.vectorstore import get_chroma_client, get_collection
     from core.models import ChatSession
-
+    
     # 1. DB에서 강의 확인
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail=f"강의를 찾을 수 없습니다: {course_id}")
-
+    
     instructor_id = course.instructor_id
-
+    
     # 2. 삭제 대상: 자식 챕터 먼저, 그 다음 부모 (FK 참조 때문에 순서 유지)
     chapters = session.exec(select(Course).where(Course.parent_course_id == course_id)).all()
     course_ids_to_delete = [ch.id for ch in chapters] + [course_id]
@@ -804,7 +804,7 @@ def delete_course(course_id: str, session: Session = Depends(get_session)) -> di
         if c:
             session.delete(c)
     session.commit()
-
+    
     # 4. 벡터 DB에서 강의 데이터 삭제 (삭제한 모든 course_id)
     try:
         ai_settings = AISettings()
@@ -812,22 +812,22 @@ def delete_course(course_id: str, session: Session = Depends(get_session)) -> di
         collection = get_collection(client, ai_settings)
         for cid in course_ids_to_delete:
             results = collection.get(where={"course_id": cid})
-            if results and results.get("ids"):
-                collection.delete(ids=results["ids"])
+        if results and results.get("ids"):
+            collection.delete(ids=results["ids"])
     except Exception as e:
         print(f"벡터 DB 삭제 중 오류 (무시): {e}")
-
+    
     # 5. 업로드 파일 삭제 (삭제한 모든 course_id)
     try:
         settings = AppSettings()
         uploads_dir = settings.uploads_dir
         for cid in course_ids_to_delete:
             course_dir = uploads_dir / instructor_id / cid
-            if course_dir.exists():
-                shutil.rmtree(course_dir)
+        if course_dir.exists():
+            shutil.rmtree(course_dir)
     except Exception as e:
         print(f"파일 삭제 중 오류 (무시): {e}")
-
+    
     return {
         "message": f"강의 '{course_id}'가 삭제되었습니다.",
         "course_id": course_id,
@@ -1226,7 +1226,7 @@ def ask(
             conversation_id=conversation_id,
             course_id=payload.course_id,
         )
-
+    
 
     # 대화 히스토리 관련 질문
     history_question_keywords = [
@@ -2412,7 +2412,7 @@ def generate_summary(
     # 캐시 저장 (transcript 기반 요약만)
     if cache_key:
         _summary_cache[cache_key] = (time.time(), answer, key_points[:10])
-
+    
     return SummaryResponse(
         course_id=payload.course_id,
         summary=answer,

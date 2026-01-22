@@ -192,7 +192,7 @@ def extract_pdf_content(
                 
                     if len(image_list) == 0:
                         print(f"📄 페이지 {page_num + 1}: 이미지가 없습니다.")
-                    
+                
                 for img_idx, img_info in enumerate(image_list):
                     if total_image_count >= _MAX_IMAGES_TOTAL:
                         print(f"⚠️ 이미지 설명 최대치({_MAX_IMAGES_TOTAL}) 도달, 이후 이미지 처리 생략")
