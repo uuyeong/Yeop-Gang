@@ -237,16 +237,48 @@ export default function InstructorChaptersPage() {
         </header>
 
         {/* 챕터 업로드 폼 */}
-        {showUploadForm && instructorId && (
-          <div className="mb-8">
-            <UploadForm
-              instructorId={instructorId}
-              parentCourseId={courseId}
-              totalChapters={courseInfo?.total_chapters}
-              onSubmitted={handleUploadSuccess}
-            />
-          </div>
-        )}
+        {showUploadForm && instructorId && (() => {
+          // 다음 챕터 번호 계산: 기존 챕터 번호 중 첫 번째 누락된 번호 찾기
+          const computeNextChapterNumber = (): number | undefined => {
+            if (chapters.length === 0) return 1;
+            
+            const existingNumbers = new Set(
+              chapters
+                .map(c => c.chapter_number)
+                .filter((num): num is number => num != null && num >= 1)
+            );
+            
+            const max = courseInfo?.total_chapters 
+              ? Math.max(courseInfo.total_chapters, ...Array.from(existingNumbers), 1)
+              : Math.max(...Array.from(existingNumbers), 1);
+            
+            // 1부터 max까지 순회하며 첫 번째 누락된 번호 찾기
+            for (let i = 1; i <= max; i++) {
+              if (!existingNumbers.has(i)) {
+                return i;
+              }
+            }
+            
+            // 모두 채워져 있으면 다음 번호 (max + 1 또는 totalChapters + 1)
+            return courseInfo?.total_chapters 
+              ? Math.min(max + 1, courseInfo.total_chapters + 1)
+              : max + 1;
+          };
+          
+          const suggestedChapterNumber = computeNextChapterNumber();
+          
+          return (
+            <div className="mb-8">
+              <UploadForm
+                instructorId={instructorId}
+                parentCourseId={courseId}
+                totalChapters={courseInfo?.total_chapters}
+                suggestedChapterNumber={suggestedChapterNumber}
+                onSubmitted={handleUploadSuccess}
+              />
+            </div>
+          );
+        })()}
 
         {isLoading && (
           <div className="flex flex-col items-center justify-center gap-4 py-16">

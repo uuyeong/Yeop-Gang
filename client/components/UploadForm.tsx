@@ -10,6 +10,7 @@ type Props = {
   instructorId?: string;
   parentCourseId?: string;  // 챕터 업로드 시 부모 강의 ID
   totalChapters?: number;  // 전체 강의 수 (챕터 업로드 시 표시용)
+  suggestedChapterNumber?: number;  // 다음 챕터 번호 제안 (누락 방지)
   onSubmitted?: (courseId: string) => void;
 };
 
@@ -20,7 +21,7 @@ type StatusResponse = {
   message?: string;
 };
 
-export default function UploadForm({ instructorId: propInstructorId, parentCourseId, totalChapters, onSubmitted }: Props) {
+export default function UploadForm({ instructorId: propInstructorId, parentCourseId, totalChapters, suggestedChapterNumber, onSubmitted }: Props) {
   const [instructorId, setInstructorId] = useState(propInstructorId || "");
   const [instructorName, setInstructorName] = useState("");
   const [courseId, setCourseId] = useState("");
@@ -28,7 +29,9 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
   const [courseCategory, setCourseCategory] = useState("");
   const [isChapter, setIsChapter] = useState(!!parentCourseId);
   const [parentCourseIdInput, setParentCourseIdInput] = useState(parentCourseId || "");
-  const [chapterNumber, setChapterNumber] = useState<number | "">("");
+  const [chapterNumber, setChapterNumber] = useState<number | "">(
+    parentCourseId && suggestedChapterNumber != null && suggestedChapterNumber >= 1 ? suggestedChapterNumber : ""
+  );
   const [video, setVideo] = useState<File | null>(null);
   const [audio, setAudio] = useState<File | null>(null);
   const [pdf, setPdf] = useState<File | null>(null);
@@ -47,11 +50,14 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
     }
   }, [propInstructorId]);
 
-  // 챕터 번호가 변경되면 챕터 ID 자동 생성
+  // 챕터 번호가 변경되면 챕터 ID 자동 생성 (번호 비우면 courseId도 비움 - 불일치 방지)
   useEffect(() => {
-    if (parentCourseId && chapterNumber !== "" && chapterNumber !== null && chapterNumber !== undefined) {
-      setCourseId(`${parentCourseId}-${chapterNumber}`);
+    if (!parentCourseId) return;
+    if (chapterNumber === "" || chapterNumber === null || chapterNumber === undefined) {
+      setCourseId("");
+      return;
     }
+    setCourseId(`${parentCourseId}-${chapterNumber}`);
   }, [parentCourseId, chapterNumber]);
 
   // 진행도 폴링 함수
@@ -119,7 +125,22 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
   }, []);
 
   const handleSubmit = async () => {
-    if (!instructorId || !courseId) {
+    const finalParentCourseId = parentCourseId || parentCourseIdInput;
+    const isChapterUpload = isChapter && finalParentCourseId.trim();
+
+    // 챕터 업로드 시: course_id는 반드시 parentCourseId + chapterNumber로 계산 (상태 비동기로 인한 불일치 방지)
+    let effectiveCourseId: string;
+    if (isChapterUpload && parentCourseId && chapterNumber !== "" && chapterNumber !== null && chapterNumber !== undefined) {
+      effectiveCourseId = `${finalParentCourseId.trim()}-${chapterNumber}`;
+    } else if (isChapterUpload) {
+      setStatus("챕터 업로드 시 '현재 업로드할 강의 번호'를 입력하세요.");
+      setUploadError(null);
+      return;
+    } else {
+      effectiveCourseId = courseId;
+    }
+
+    if (!instructorId || !effectiveCourseId) {
       setStatus("instructorId와 courseId를 입력하세요.");
       setUploadError(null);
       return;
@@ -136,16 +157,13 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
     
     const form = new FormData();
     form.append("instructor_id", instructorId);
-    form.append("course_id", courseId);
+    form.append("course_id", effectiveCourseId);
     if (instructorName.trim()) form.append("instructor_name", instructorName.trim());
     form.append("course_title", courseTitle.trim()); // 필수 항목
     if (courseCategory.trim()) form.append("course_category", courseCategory.trim());
-    const finalParentCourseId = parentCourseId || parentCourseIdInput;
-    if (isChapter && finalParentCourseId.trim()) {
+    if (isChapterUpload) {
       form.append("parent_course_id", finalParentCourseId.trim());
-      if (chapterNumber !== "") {
-        form.append("chapter_number", String(chapterNumber));
-      }
+      form.append("chapter_number", String(chapterNumber));
     }
     if (video) form.append("video", video);
     if (audio) form.append("audio", audio);
@@ -180,17 +198,15 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
       setProgress(5);
       setProgressMessage("업로드 완료, 처리 대기 중...");
 
-      // 업로드 성공 후 진행도 폴링 시작 (2초마다 확인)
+      // 업로드 성공 후 진행도 폴링 시작 (2초마다 확인) — effectiveCourseId 사용
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
       }
       
-      // 즉시 한 번 확인
-      pollStatus(courseId);
+      pollStatus(effectiveCourseId);
       
-      // 그 다음부터는 3초마다 확인 (rate limit 방지)
       pollingIntervalRef.current = setInterval(() => {
-        pollStatus(courseId);
+        pollStatus(effectiveCourseId);
       }, 3000);
     } catch (err) {
       console.error("업로드 오류:", err);
