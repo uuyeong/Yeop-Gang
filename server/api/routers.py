@@ -249,7 +249,7 @@ def _generate_persona_response(
             if course_title:
                 course_info_text += f"**강의명**: {course_title}\n"
             if course_category:
-                course_info_text += f"**카테고리**: {course_category}\n"
+                course_info_text += f"**과목**: {course_category}\n"
         
         # 강사 이름 추출
         instructor_name = None
@@ -265,7 +265,7 @@ def _generate_persona_response(
         # 강의명 기반 주제 추출 (강의명에서 핵심 주제 추출)
         subject = None
         if course_title:
-            # 카테고리가 있으면 카테고리를 주제로 우선 사용
+            # 과목이 있으면 과목을 주제로 우선 사용
             if course_category:
                 subject = course_category.strip()
             else:
@@ -326,9 +326,9 @@ def _generate_persona_response(
             "- 강사로서 자연스럽고 친근한 말투를 사용하세요.\n"
             "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
             "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
-            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 카테고리를 자연스럽게 답변하세요.\n"
+            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 과목을 자연스럽게 답변하세요.\n"
             "- **강사 소개 질문**: 학생이 '누구세요?', '선생님 이름이 뭐예요?', '강사님은 누구세요?' 같은 질문을 하면, 위에 명시된 강사 이름을 자연스럽게 답변하세요.\n"
-            "- **정체성 인식**: 당신은 위에 명시된 주제(예: 영어, 수학 등)를 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/카테고리에 명시된 주제의 선생님으로서 답변하세요."
+            "- **정체성 인식**: 당신은 위에 명시된 과목(예: 영어, 수학 등)을 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/과목에 명시된 과목의 선생님으로서 답변하세요. 예를 들어, 과목이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 문학 작품을 독해하는 수업이어도 당신은 영어 선생님으로서 문법, 어순 등 영어를 가르치는 선생님으로서 답변하세요."
         )
         
         if context:
@@ -575,7 +575,7 @@ def list_courses(
     """
     모든 강의 목록 조회 (학생용)
     - q: 검색어 (강의명, 강사명으로 검색)
-    - category: 카테고리 필터
+    - category: 과목 필터
     """
     from sqlmodel import or_
     
@@ -608,7 +608,7 @@ def list_courses(
         if conditions:
             query = query.where(or_(*conditions))
     
-    # 카테고리 필터
+    # 과목 필터
     if category:
         query = query.where(Course.category == category)
     
@@ -2151,7 +2151,7 @@ def generate_summary(
             f"## 강의 전사 내용:\n{transcript_text}\n\n"
             f"## 강의 정보:\n"
             f"- 강의명: {course_title or '정보 없음'}\n"
-            f"- 카테고리: {course_category or '정보 없음'}\n"
+            f"- 과목: {course_category or '정보 없음'}\n"
             f"- 과목 유형: {subject_type}\n\n"
             f"## 중요 안내사항:\n"
             f"- 이 전사 내용은 자동 음성 인식(STT)으로 생성되었으므로, 일부 단어가 부정확하거나 오타가 있을 수 있습니다.\n"
@@ -2348,7 +2348,7 @@ def generate_summary(
             f"이 강의의 핵심 내용을 **마크다운 형식**으로 전문적이고 시각적으로 잘 정리된 요약노트를 작성해주세요.\n\n"
             f"## 강의 정보:\n"
             f"- 강의명: {course_title or '정보 없음'}\n"
-            f"- 카테고리: {course_category or '정보 없음'}\n"
+            f"- 과목: {course_category or '정보 없음'}\n"
             f"- 과목 유형: {subject_type}\n\n"
             f"## 요약노트 작성 지침:\n\n"
             f"다음 구조와 형식을 **정확히** 따라주세요:\n\n"
@@ -2523,7 +2523,7 @@ def generate_quiz(
             f"## 강의 전사 내용:\n{transcript_text}\n\n"
             f"## 강의 정보:\n"
             f"- 강의명: {course_title or '정보 없음'}\n"
-            f"- 카테고리: {course_category or '정보 없음'}\n"
+            f"- 과목: {course_category or '정보 없음'}\n"
             f"- 과목 유형: {subject_type}\n\n"
             f"## 중요 안내사항:\n"
             f"- 이 전사 내용은 자동 음성 인식(STT)으로 생성되었으므로, 일부 단어가 부정확하거나 오타가 있을 수 있습니다.\n"
@@ -2600,7 +2600,7 @@ def generate_quiz(
             f"이 강의 내용을 바탕으로 객관식 퀴즈 {num_questions}문제를 만들어주세요.\n\n"
             f"## 강의 정보:\n"
             f"- 강의명: {course_title or '정보 없음'}\n"
-            f"- 카테고리: {course_category or '정보 없음'}\n"
+            f"- 과목: {course_category or '정보 없음'}\n"
             f"- 과목 유형: {subject_type}\n\n"
             f"## 중요 안내사항:\n"
             f"- 제공된 강의 내용은 자동 음성 인식(STT)으로 생성되었을 수 있으므로, 일부 단어가 부정확하거나 오타가 있을 수 있습니다.\n"

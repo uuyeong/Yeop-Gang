@@ -30,7 +30,7 @@ export default function StudentPage() {
   // 검색 및 필터 상태
   const [searchQuery, setSearchQuery] = useState("");
   const [specializationFilter, setSpecializationFilter] = useState<string>("all"); // 과목 종류 (수학, 생명과학 등)
-  const [categoryFilter, setCategoryFilter] = useState<string>("all"); // 카테고리 (개념강의 등)
+  const [categoryFilter, setCategoryFilter] = useState<string>("all"); // 과목 필터
 
   useEffect(() => {
     // 강사 로그인 여부 확인
@@ -92,7 +92,7 @@ export default function StudentPage() {
     // 과목 종류 필터 (선생님의 세부분야 - 수학, 생명과학 등)
     const matchesSpecialization = specializationFilter === "all" || course.instructor_specialization === specializationFilter;
     
-    // 카테고리 필터 (개념강의 등)
+    // 과목 필터
     const matchesCategory = categoryFilter === "all" || course.category === categoryFilter;
     
     return matchesSearch && matchesSpecialization && matchesCategory;
@@ -101,7 +101,7 @@ export default function StudentPage() {
   // 사용 가능한 과목 종류 목록 (선생님의 세부분야)
   const specializations = Array.from(new Set(courses.map((c) => c.instructor_specialization).filter(Boolean))) as string[];
   
-  // 사용 가능한 카테고리 목록
+  // 사용 가능한 과목 목록
   const categories = Array.from(new Set(courses.map((c) => c.category).filter(Boolean))) as string[];
 
   // 필터 초기화
@@ -231,11 +231,11 @@ export default function StudentPage() {
                 </div>
               )}
 
-              {/* 카테고리 필터 (개념강의 등) */}
+              {/* 과목 필터 */}
               {categories.length > 0 && (
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700">
-                    카테고리
+                    과목
                   </label>
                   <div className="flex flex-wrap gap-2">
                     <button

@@ -54,7 +54,7 @@ export default function CourseSection() {
     fetchCourses();
   }, []);
 
-  // 카테고리별 필터링 (강의명, 카테고리, 강사명 모두 확인)
+  // 과목별 필터링 (강의명, 과목, 강사명 모두 확인)
   const filteredCourses = activeTab === "all" 
     ? courses 
     : courses.filter(course => {
@@ -71,7 +71,7 @@ export default function CourseSection() {
         const keywords = subjectMap[activeTab] || [];
         if (keywords.length === 0) return false;
         
-        // 강의명, 카테고리, 강사명에서 키워드 검색
+        // 강의명, 과목, 강사명에서 키워드 검색
         const title = (course.title || "").toLowerCase();
         const category = (course.category || "").toLowerCase();
         const instructorName = (course.instructor_name || "").toLowerCase();

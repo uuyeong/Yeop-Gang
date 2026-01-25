@@ -152,6 +152,13 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
       return;
     }
     
+    // 과목 필수 검증 (챕터가 아닌 경우만)
+    if (!parentCourseId && (!courseCategory || !courseCategory.trim())) {
+      setStatus("과목을 입력하세요.");
+      setUploadError(null);
+      return;
+    }
+    
     // 에러 상태 초기화
     setUploadError(null);
     
@@ -160,7 +167,13 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
     form.append("course_id", effectiveCourseId);
     if (instructorName.trim()) form.append("instructor_name", instructorName.trim());
     form.append("course_title", courseTitle.trim()); // 필수 항목
-    if (courseCategory.trim()) form.append("course_category", courseCategory.trim());
+    // 챕터가 아닌 경우 과목은 필수, 챕터인 경우는 부모 강의의 과목 사용
+    if (!parentCourseId) {
+      form.append("course_category", courseCategory.trim()); // 필수 항목
+    } else if (courseCategory && courseCategory.trim()) {
+      // 챕터인 경우에도 과목이 입력되면 전송 (선택사항)
+      form.append("course_category", courseCategory.trim());
+    }
     if (isChapterUpload) {
       form.append("parent_course_id", finalParentCourseId.trim());
       form.append("chapter_number", String(chapterNumber));
@@ -324,21 +337,22 @@ export default function UploadForm({ instructorId: propInstructorId, parentCours
               : "강의명은 필수 입력 항목입니다."}
           </p>
         </div>
-        {/* 카테고리 - 챕터 업로드 시에는 부모 강의의 카테고리를 사용하므로 숨김 */}
+        {/* 강의 과목 - 챕터 업로드 시에는 부모 강의의 과목을 사용하므로 숨김 */}
         {!parentCourseId && (
           <div>
             <label className="mb-2 block text-sm font-medium text-slate-700">
-              카테고리 (선택사항)
+              강의 과목 <span className="text-red-500">*</span>
             </label>
             <input
               className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-              placeholder="예: 수능특강, 개념강의, 실전모의고사"
+              placeholder="예: 영어, 수학, 국어"
               value={courseCategory}
               onChange={(e) => setCourseCategory(e.target.value)}
               disabled={isProcessing}
+              required
             />
             <p className="mt-1 text-xs text-slate-500">
-              카테고리를 입력하면 검색 및 필터링에 사용됩니다.
+              과목을 입력하세요. 검색 및 필터링에 사용됩니다.
             </p>
           </div>
         )}

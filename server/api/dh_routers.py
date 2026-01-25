@@ -343,6 +343,14 @@ async def instructor_upload(
                 detail="You can only upload courses for yourself",
             )
         
+        # 과목 필수 검증 (챕터가 아닌 경우만)
+        if not parent_course_id and (not course_category or not course_category.strip()):
+            logger.error(f"❌ 과목 필수 항목 누락 - course_id: {course_id}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="과목은 필수 항목입니다.",
+            )
+        
         # Instructor/Course 확인 및 이름 업데이트
         logger.info(f"🔍 강사 정보 확인 중 - instructor_id: {instructor_id}")
         instructor = session.get(Instructor, instructor_id)
@@ -420,7 +428,7 @@ async def instructor_upload(
                             "id": course_id,
                             "instructor_id": instructor_id,
                             "title": course_title.strip() if course_title.strip() else course_id,
-                            "category": course_category.strip() if course_category and course_category.strip() else None,
+                            "category": course_category.strip() if course_category.strip() else None,
                             "parent_course_id": parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
                             "chapter_number": chapter_number,
                             "status": CourseStatus.processing.value,
@@ -443,7 +451,7 @@ async def instructor_upload(
                         id=course_id,
                         instructor_id=instructor_id,
                         title=course_title.strip() if course_title.strip() else course_id,
-                        category=course_category.strip() if course_category and course_category.strip() else None,
+                        category=course_category.strip() if course_category.strip() else None,
                         parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
                         chapter_number=chapter_number,
                     )
@@ -459,7 +467,7 @@ async def instructor_upload(
                 detail="Course belongs to another instructor",
             )
         else:
-            # 기존 강의가 있으면 제목 및 카테고리 업데이트
+            # 기존 강의가 있으면 제목 및 과목 업데이트
             logger.info(f"✏️ 기존 강의 정보 업데이트 - course_id: {course_id}")
             if course_title and course_title.strip():
                 course.title = course_title.strip()
@@ -604,7 +612,7 @@ async def instructor_update_course(
     current_user: dict = Depends(require_instructor()),
     session: Session = Depends(get_session),
 ) -> dict:
-    """강사가 자신의 강의 정보 수정 (제목, 카테고리)"""
+    """강사가 자신의 강의 정보 수정 (제목, 과목)"""
     from datetime import datetime
     
     # 강의 확인 및 권한 체크

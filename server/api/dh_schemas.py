@@ -139,12 +139,12 @@ class CreateCourseRequest(BaseModel):
     """강의 생성 요청"""
     course_id: str = Field(..., description="강의 ID")
     title: Optional[str] = Field(default=None, description="강의 제목")
-    category: Optional[str] = Field(default=None, description="카테고리")
+    category: Optional[str] = Field(default=None, description="과목")
     total_chapters: Optional[int] = Field(default=None, description="전체 강의 수")
 
 
 class UpdateCourseRequest(BaseModel):
     """강의 수정 요청"""
     title: Optional[str] = Field(default=None, description="강의 제목")
-    category: Optional[str] = Field(default=None, description="카테고리")
+    category: Optional[str] = Field(default=None, description="과목")
 

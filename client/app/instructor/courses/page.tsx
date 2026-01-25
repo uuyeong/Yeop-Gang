@@ -250,6 +250,11 @@ export default function InstructorCoursesPage() {
 
 
   const handleCreateCourse = async () => {
+    // 과목 필수 검증
+    if (!newCourseCategory || !newCourseCategory.trim()) {
+      alert("과목을 입력하세요.");
+      return;
+    }
     if (!newCourseId.trim()) {
       alert("강의 목록 ID를 입력하세요.");
       return;
@@ -486,7 +491,7 @@ export default function InstructorCoursesPage() {
                           type="text"
                           value={editCategory}
                           onChange={(e) => setEditCategory(e.target.value)}
-                          placeholder="카테고리"
+                          placeholder="과목"
                           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                         />
                       </div>
@@ -497,7 +502,7 @@ export default function InstructorCoursesPage() {
                         </h3>
                         {course.category && (
                           <p className="mb-2 text-xs text-slate-500 pr-8">
-                            카테고리: {course.category}
+                            과목: {course.category}
                           </p>
                         )}
                       </>
@@ -519,10 +524,10 @@ export default function InstructorCoursesPage() {
                       )}
                     </div>
 
-                    {/* 카테고리 */}
+                    {/* 과목 */}
                     {course.category && (
                       <p className="mb-2 text-xs text-slate-500">
-                        카테고리: {course.category}
+                        과목: {course.category}
                       </p>
                     )}
 
@@ -652,17 +657,18 @@ export default function InstructorCoursesPage() {
 
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700">
-                    카테고리 (선택사항)
+                    강의 과목 <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     value={newCourseCategory}
                     onChange={(e) => setNewCourseCategory(e.target.value)}
-                    placeholder="예: 개념강의, 실전모의고사"
+                    placeholder="예: 영어, 수학, 국어"
                     className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    required
                   />
                   <p className="mt-1 text-xs text-slate-500">
-                    카테고리를 입력하면 검색 및 필터링에 사용됩니다.
+                    과목을 입력하세요. 검색 및 필터링에 사용됩니다.
                   </p>
                 </div>
               </div>
