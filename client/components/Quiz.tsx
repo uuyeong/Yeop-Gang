@@ -117,6 +117,9 @@ export default function Quiz({ courseId }: Props) {
             .replace(/^선택지\d+[:：]\s*/, "")
             .replace(/^\d+[\.\)]\s*/, "")
             .replace(/^[A-D][\.\)]\s*/, "");
+          if (!currentQuestion.options) {
+            currentQuestion.options = [];
+          }
           currentQuestion.options.push(option);
         }
       }
@@ -135,15 +138,17 @@ export default function Quiz({ courseId }: Props) {
         }
       }
       // 일반 텍스트 (문제 내용에 추가)
-      else if (line && currentQuestion && !currentQuestion.question.includes(line)) {
-        if (currentQuestion.options.length === 0) {
-          currentQuestion.question += " " + line;
+      else if (line && currentQuestion && !currentQuestion.question?.includes(line)) {
+        if (!currentQuestion.options || currentQuestion.options.length === 0) {
+          if (currentQuestion.question) {
+            currentQuestion.question += " " + line;
+          }
         }
       }
     }
 
     // 마지막 문제 추가
-    if (currentQuestion && currentQuestion.question && currentQuestion.options.length >= 2) {
+    if (currentQuestion && currentQuestion.question && currentQuestion.options && currentQuestion.options.length >= 2) {
       // 선택지가 4개가 아니면 채우기
       while (currentQuestion.options.length < 4) {
         currentQuestion.options.push(`선택지 ${currentQuestion.options.length + 1}`);
