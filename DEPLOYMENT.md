@@ -14,9 +14,37 @@
 
 ## 🆓 무료 배포 (render.yaml 없이)
 
-**render.yaml은 필수가 아닙니다.** Render 대시보드에서 서비스를 직접 만들면 됩니다. Dockerfile만 있으면 배포할 수 있습니다.
+**render.yaml은 필수가 아닙니다.** Render 대시보드에서 서비스를 직접 만들면 됩니다.
 
-### 1. 백엔드 배포
+### 방법 1: 통합 Dockerfile 사용 (권장) ⭐
+
+**하나의 서비스로 Client와 Server를 함께 배포합니다.**
+
+1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
+2. GitHub 저장소 연결 후 이 프로젝트 선택
+3. 아래처럼 설정:
+   - **Name**: `yeopgang-app` (원하는 이름)
+   - **Region**: Singapore (가까운 지역)
+   - **Runtime**: **Docker**
+   - **Dockerfile Path**: `Dockerfile` (root의 Dockerfile)
+   - **Docker Context**: `.` (프로젝트 루트)
+   - **Plan**: **Free**
+4. **Environment** 탭에서 **Add Environment Variable**:
+   - `OPENAI_API_KEY` = (본인 OpenAI 키)
+   - `DATABASE_URL` = `sqlite:///./server/data/yeopgang.db`
+   - `DATA_ROOT` = `server/data`
+   - `CHROMA_DB_PATH` = `server/data/chroma`
+   - `NEXT_PUBLIC_API_URL` = `http://localhost:8000` (또는 배포 후 실제 백엔드 URL)
+5. **Create Web Service** 클릭
+
+**장점**: 하나의 서비스로 관리, 간단함  
+**단점**: 두 서비스가 하나의 컨테이너에서 실행 (무료 플랜에서는 문제없음)
+
+### 방법 2: 분리된 Dockerfile 사용 (기존 방식)
+
+**Client와 Server를 별도 서비스로 배포합니다.**
+
+#### 1. 백엔드 배포
 
 1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
 2. GitHub 저장소 연결 후 이 프로젝트 선택
@@ -36,7 +64,7 @@
 
 배포가 끝나면 **URL**이 나옵니다. 예: `https://yeopgang-backend.onrender.com` → **복사해 두기.**
 
-### 2. 프론트엔드 배포
+#### 2. 프론트엔드 배포
 
 1. **New +** → **Web Service** → 같은 저장소 선택
 2. 설정:
@@ -80,7 +108,7 @@
    # .env 파일을 편집하여 실제 값 입력
    ```
 
-2. **Docker Compose로 실행**
+2. **Docker Compose로 실행** (통합 Dockerfile 사용)
 
    ```bash
    docker-compose up --build
@@ -90,6 +118,17 @@
 
    ```bash
    docker-compose up -d --build
+   ```
+
+   **또는 직접 Docker로 실행:**
+
+   ```bash
+   docker build -t yeopgang-app --build-arg NEXT_PUBLIC_API_URL=http://localhost:8000 .
+   docker run -p 3000:3000 -p 8000:8000 \
+     -e OPENAI_API_KEY=your_key \
+     -e DATABASE_URL=sqlite:///./server/data/yeopgang.db \
+     -v $(pwd)/server/data:/app/server/data \
+     yeopgang-app
    ```
 
 3. **서비스 접속**
@@ -163,23 +202,23 @@ Render 대시보드의 각 서비스에서 다음 환경 변수를 설정하세�
 
 ### 중요 사항
 
-1. **영구 디스크 (Persistent Disk)**
+1. **서비스 URL**
 
-   SQLite 데이터베이스와 업로드된 파일을 저장하기 위해 Render의 영구 디스크를 사용해야 합니다. 백엔드 서비스에 디스크를 추가하고 `/app/data` 경로에 마운트하세요.
+   프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 **실제 URL**로 설정해야 합니다. 예: `https://yeopgang-backend.onrender.com`
 
-2. **서비스 URL**
+2. **무료 플랜 제한사항**
 
-   프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 실제 URL로 설정해야 합니다. Render는 각 서비스에 고유한 URL을 제공합니다.
+   - 15분 미사용 시 슬립 → 첫 요청 시 30초~1분 정도 깨우는 시간
+   - **영구 디스크 없음** → DB·업로드 파일은 재배포/재시작 시 삭제됨 (데모용 적합)
+   - 월간 사용 시간 제한 있음
 
-3. **무료 플랜 제한사항**
+3. **영구 디스크 (유료 플랜)**
 
-   - Render 무료 플랜은 서비스가 15분간 비활성 상태일 때 자동으로 슬리프 모드로 전환됩니다.
-   - 첫 요청 시 깨우는 데 시간이 걸릴 수 있습니다.
-   - 월간 사용 시간 제한이 있습니다.
+   데이터를 유지하려면 **Starter 이상** + Persistent Disk (`/app/data`) 연결이 필요합니다. render.yaml 없이 수동 배포 시에도 서비스 설정에서 디스크를 추가할 수 있습니다.
 
-4. **CORS 설정**
+4. **CORS**
 
-   백엔드의 CORS 설정이 프론트엔드 도메인을 허용하도록 확인하세요. 현재 설정은 모든 도메인을 허용하므로 문제없습니다.
+   현재 백엔드는 모든 도메인 허용이므로 별도 설정 없이 사용 가능합니다.
 
 ## 🔧 문제 해결
 

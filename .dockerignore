@@ -1,0 +1,94 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# 환경 변수
+.env
+.env.local
+.env*.local
+
+# 문서
+*.md
+!README.md
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.npm
+.pnpm-store
+.yarn
+.yarn-cache
+
+# Next.js
+.next/
+out/
+.turbo/
+.swc/
+
+# 데이터베이스 및 데이터
+*.db
+*.sqlite
+*.sqlite3
+data/
+server/data/
+**/chroma/
+
+# 로그
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 미디어 파일 (대용량)
+*.mp4
+*.mp3
+*.avi
+*.mov
+*.wmv
+*.flv
+*.mkv
+*.wav
+*.m4a
+*.aac
+*.ogg
+*.smi
+
+# 테스트
+test/
+tests/
+__tests__/
+*.test.js
+*.test.ts
+*.test.py
+
+# 기타
+*.tmp
+*.temp
+.cache/
+tmp/
+temp/
