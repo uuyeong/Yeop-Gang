@@ -13,7 +13,13 @@ type EditProfileModalProps = {
   isOpen: boolean;
   onClose: () => void;
   token: string;
-  onSuccess?: (data: InstructorProfileResponse & { name?: string; email?: string }) => void;
+  onSuccess?: (data: { 
+    message?: string;
+    name?: string; 
+    email?: string; 
+    profile_image_url?: string | null;
+    [k: string]: unknown;
+  }) => void;
 };
 
 export default function EditProfileModal({
@@ -164,10 +170,10 @@ export default function EditProfileModal({
       console.log("[EditProfileModal] 업데이트 성공:", res);
       // profile_image_url을 명시적으로 전달
       onSuccess?.({
-        ...res,
         name: res.name ?? formData.name,
         email: res.email ?? formData.email,
         profile_image_url: res.profile_image_url ?? profileImageUrl ?? undefined,
+        ...res,
       });
       onClose();
     } catch (e: unknown) {
