@@ -11,6 +11,8 @@ RUN npm ci
 COPY client/ .
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# public 디렉토리가 없으면 빈 디렉토리 생성 (standalone 빌드를 위해)
+RUN mkdir -p public || true
 RUN npm run build
 
 # ==================== Server 빌드 스테이지 ====================
@@ -57,9 +59,10 @@ COPY --from=server-builder /usr/local/bin /usr/local/bin
 COPY server/ ./server/
 
 # Client 빌드 결과 복사 (standalone 출력)
-COPY --from=client-builder /app/client/public ./client/public
 COPY --from=client-builder /app/client/.next/standalone ./client/
 COPY --from=client-builder /app/client/.next/static ./client/.next/static
+# public 디렉토리 복사 (빈 디렉토리라도 존재하므로 안전하게 복사 가능)
+COPY --from=client-builder /app/client/public ./client/public
 
 # 데이터 디렉토리 생성
 RUN mkdir -p server/data/uploads server/data/chroma && \
