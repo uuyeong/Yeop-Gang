@@ -208,6 +208,7 @@ export default function EditProfileModal({
                 >
                   {profileImagePreview ? (
                     <div className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={profileImagePreview}
                         alt="프로필 미리보기"

@@ -5,7 +5,7 @@ echo "🚀 서비스 시작 중..."
 
 # 백엔드 서버 시작 (백그라운드)
 cd /app/server
-uvicorn main:app --host 0.0.0.0 --port 8000 &
+uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 echo "✅ 백엔드 서버 시작 (PID: $BACKEND_PID)"
 
@@ -14,7 +14,7 @@ sleep 2
 
 # 프론트엔드 서버 시작 (백그라운드)
 cd /app/client
-NODE_ENV=production PORT=3000 node server.js &
+npm start &
 FRONTEND_PID=$!
 echo "✅ 프론트엔드 서버 시작 (PID: $FRONTEND_PID)"
 
