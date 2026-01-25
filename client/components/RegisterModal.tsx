@@ -195,6 +195,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               >
                 {profileImagePreview ? (
                   <div className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={profileImagePreview}
                       alt="프로필 미리보기"

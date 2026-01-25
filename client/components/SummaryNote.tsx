@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { FileText, AlertCircle, RefreshCw } from "lucide-react";
 import { apiPost, apiGet, handleApiError } from "../lib/api";
 import { marked } from "marked";
@@ -28,7 +28,7 @@ export default function SummaryNote({ courseId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
 
-  const fetchSummary = async () => {
+  const fetchSummary = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
@@ -121,7 +121,7 @@ export default function SummaryNote({ courseId }: Props) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [courseId]);
 
   useEffect(() => {
     // 강의 정보 가져오기
@@ -139,7 +139,7 @@ export default function SummaryNote({ courseId }: Props) {
     fetchCourseInfo();
     // 컴포넌트 마운트 시 자동으로 요약 생성
     fetchSummary();
-  }, [courseId]);
+  }, [courseId, fetchSummary]);
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
