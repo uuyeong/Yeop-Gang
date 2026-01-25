@@ -12,9 +12,9 @@ echo "✅ 백엔드 서버 시작 (PID: $BACKEND_PID)"
 # 잠시 대기 (백엔드가 시작될 시간)
 sleep 2
 
-# 프론트엔드 서버 시작 (백그라운드)
+# 프론트엔드 서버 시작 (백그라운드, Next.js standalone)
 cd /app/client
-npm start &
+node server.js &
 FRONTEND_PID=$!
 echo "✅ 프론트엔드 서버 시작 (PID: $FRONTEND_PID)"
 

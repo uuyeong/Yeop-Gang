@@ -14,12 +14,13 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 # ==================== Server 빌드 스테이지 ====================
-FROM python:3.11-slim AS server-builder
+# bookworm(Debian 12) 사용: trixie는 security 저장소 미제공으로 404 발생
+FROM python:3.11-slim-bookworm AS server-builder
 
 WORKDIR /app/server
 
 # 시스템 의존성 설치 (ffmpeg for Whisper STT)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -30,15 +31,22 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # ==================== 최종 실행 스테이지 ====================
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # 시스템 의존성 설치
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
+# Node.js는 NodeSource에서 설치, ffmpeg는 Debian 저장소에서 설치
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
     curl \
-    nodejs \
-    npm \
     bash \
+    ca-certificates \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends --fix-missing nodejs \
+    && apt-get install -y --no-install-recommends --fix-missing ffmpeg \
+    || (apt-get update && apt-get install -y --no-install-recommends --fix-missing ffmpeg) \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
