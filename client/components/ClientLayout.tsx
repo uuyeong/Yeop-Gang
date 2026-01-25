@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Header from "./Header";
 import LoginModal from "./LoginModal";
 import RegisterModal from "./RegisterModal";
 
@@ -27,11 +26,7 @@ export default function ClientLayout({ children }: ClientLayoutProps) {
 
   return (
     <>
-      <Header
-        onLoginClick={() => setShowLoginModal(true)}
-        onRegisterClick={() => setShowRegisterModal(true)}
-      />
-      <main className="pt-16">{children}</main>
+      {children}
       {showLoginModal && (
         <LoginModal
           onClose={() => setShowLoginModal(false)}
