@@ -307,7 +307,7 @@ export default function EditProfileModal({
                 id="edit-specialization"
                 name="specialization"
                 value={formData.specialization}
-                onChange={handleChange}
+                onChange={(e) => handleChange(e as React.ChangeEvent<HTMLSelectElement>)}
                 required
                 className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
