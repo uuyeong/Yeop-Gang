@@ -2,18 +2,79 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&display=swap');
+
 :root {
   color-scheme: light;
   background-color: #ffffff;
   color: #1e293b;
-  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  font-family: "Noto Sans KR", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
+  
+  /* Neo-Brutalism Color Variables - 예쁜 파란색 계열 */
+  --primary: #60A5FA; /* 예쁜 파란색 (blue-400) */
+  --primary-foreground: #FFFFFF; /* White */
+  --secondary: #3B82F6; /* 중간 파란색 (blue-500) */
+  --secondary-foreground: #FFFFFF;
+  --accent: #38BDF8; /* 스카이 블루 (sky-400) */
+  --accent-foreground: #FFFFFF;
+  
+  /* Typography */
+  --font-display: 'Black Han Sans', sans-serif;
+  --font-body: 'Noto Sans KR', sans-serif;
 }
 
 body {
   min-height: 100vh;
   margin: 0;
-  background-color: #f8fafc;
+  background-color: #ffffff;
+  font-family: var(--font-body);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+}
+
+/* Neo-Brutalism Utilities */
+@layer components {
+  .brutal-shadow {
+    box-shadow: 8px 8px 0 0 rgba(0, 0, 0, 1);
+  }
+  
+  .brutal-shadow-sm {
+    box-shadow: 4px 4px 0 0 rgba(0, 0, 0, 1);
+  }
+  
+  .brutal-border {
+    border: 3px solid rgba(0, 0, 0, 1);
+  }
+  
+  .brutal-border-thin {
+    border: 2px solid rgba(0, 0, 0, 1);
+  }
+  
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem;
+      padding-right: 2rem;
+      max-width: 1280px;
+    }
+  }
 }
 
 @keyframes shimmer {
