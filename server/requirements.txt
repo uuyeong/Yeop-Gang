@@ -41,8 +41,10 @@ pydub==0.25.1
 pymupdf==1.24.0
 Pillow==10.4.0
 
-# 한국어 맞춤법 검사
-py-hanspell==1.1
+# 한국어 맞춤법 검사 (선택적 - 빌드 문제로 인해 제외)
+# py-hanspell==1.1
+# 참고: py-hanspell은 빌드 오류로 인해 requirements.txt에서 제외되었습니다.
+#       필요시 수동으로 설치하거나, 코드는 ImportError를 처리하므로 없어도 동작합니다.
 
 # 참고사항:
 # - langchain-openai 0.2.6 requires openai>=1.54.0,<2.0.0

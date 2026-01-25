@@ -28,7 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 의존성 설치
-COPY server/requirements.txt .
+# requirements.txt 복사 (캐시 무효화를 위해 별도 레이어)
+COPY server/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel build && \
     pip install --no-cache-dir -r requirements.txt
 
