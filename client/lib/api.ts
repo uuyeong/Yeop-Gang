@@ -5,15 +5,22 @@
  * - 에러 처리
  */
 
-// Render 환경에서는 같은 컨테이너 내에서 실행되므로 상대 경로 사용 (Next.js rewrites가 프록시)
-// 로컬 개발 환경에서는 절대 URL 사용
+// API 기본 URL 결정
+// Render 환경: Next.js API Routes 프록시 사용 (상대 경로)
+// 로컬 개발: 절대 URL 사용
 const getApiBaseUrl = () => {
-  // 브라우저 환경에서는 상대 경로 사용 (Next.js rewrites가 프록시)
-  if (typeof window !== 'undefined') {
-    return process.env.NEXT_PUBLIC_API_URL || '';
+  // 환경 변수가 설정되어 있으면 사용
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
   }
+  
+  // 브라우저 환경에서는 상대 경로 사용 (Next.js API Routes가 프록시)
+  if (typeof window !== 'undefined') {
+    return '';
+  }
+  
   // 서버 사이드에서는 절대 URL 사용
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return "http://localhost:8000";
 };
 
 export const API_BASE_URL = getApiBaseUrl();
@@ -84,9 +91,21 @@ export async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const url = endpoint.startsWith("http")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint}`;
+  // URL 생성
+  let url: string;
+  if (endpoint.startsWith("http")) {
+    // 절대 URL이면 그대로 사용
+    url = endpoint;
+  } else {
+    // 상대 경로인 경우
+    if (API_BASE_URL) {
+      // API_BASE_URL이 있으면 붙여서 사용
+      url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
+    } else {
+      // API_BASE_URL이 비어있으면 상대 경로 그대로 사용 (Next.js API Routes가 프록시)
+      url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+    }
+  }
 
   try {
     // 인증 토큰이 있으면 Authorization 헤더 추가
@@ -199,9 +218,17 @@ export async function apiUpload<T>(
   formData: FormData,
   options?: RequestInit
 ): Promise<T> {
-  const url = endpoint.startsWith("http")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint}`;
+  // URL 생성 (apiFetch와 동일한 로직)
+  let url: string;
+  if (endpoint.startsWith("http")) {
+    url = endpoint;
+  } else {
+    if (API_BASE_URL) {
+      url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
+    } else {
+      url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+    }
+  }
 
   try {
     const response = await fetch(url, {
