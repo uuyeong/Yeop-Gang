@@ -34,8 +34,10 @@
    - `DATABASE_URL` = `sqlite:///./server/data/yeopgang.db`
    - `DATA_ROOT` = `server/data`
    - `CHROMA_DB_PATH` = `server/data/chroma`
-   - `NEXT_PUBLIC_API_URL` = `http://localhost:8000` (또는 배포 후 실제 백엔드 URL)
+   - `NEXT_PUBLIC_API_URL` = (설정하지 않음 - Next.js rewrites가 자동으로 프록시)
 5. **Create Web Service** 클릭
+
+> **참고**: `NEXT_PUBLIC_API_URL`은 설정하지 않아도 됩니다. 같은 컨테이너 내에서 실행되므로 Next.js rewrites가 자동으로 백엔드로 프록시합니다.
 
 **장점**: 하나의 서비스로 관리, 간단함  
 **단점**: 두 서비스가 하나의 컨테이너에서 실행 (무료 플랜에서는 문제없음)
@@ -262,6 +264,63 @@ Windows에서 경로 문제가 발생할 수 있습니다. `docker-compose.yml`�
 - 로그에서 오류 확인
 - 메모리 사용량 확인
 - 환경 변수 설정 확인
+
+## ⚡ 빌드 시간 최적화
+
+Render 배포 시 빌드 시간을 줄이기 위한 최적화 방법입니다.
+
+### 1. Docker 레이어 캐싱 활용
+
+현재 Dockerfile은 레이어 캐싱을 최적화했습니다:
+- **의존성 설치**와 **소스 코드 복사**를 분리하여, 소스 코드만 변경되면 의존성 레이어는 재사용됩니다
+- **시스템 패키지 설치**를 별도 레이어로 분리하여 캐싱됩니다
+
+### 2. .dockerignore 최적화
+
+`.dockerignore` 파일에 불필요한 파일을 추가하여 빌드 컨텍스트 크기를 줄였습니다:
+- `node_modules/`, `.next/` 등 빌드 산출물 제외
+- 테스트 파일, 로그 파일 제외
+- 대용량 미디어 파일 제외
+
+### 3. Render 빌드 최적화 설정
+
+Render 대시보드에서 다음 설정을 확인하세요:
+
+1. **Auto-Deploy**: 변경사항이 있을 때만 자동 배포
+2. **Build Command**: Dockerfile 사용 시 자동으로 최적화됨
+3. **Docker Build Context**: `.` (프로젝트 루트)로 설정
+
+### 4. 추가 최적화 팁
+
+#### npm 캐시 활용
+```dockerfile
+# 이미 적용됨: npm ci --prefer-offline --no-audit
+```
+
+#### Python 패키지 캐시 (선택사항)
+Render에서는 Docker 빌드 캐시가 자동으로 관리되므로 추가 설정이 필요 없습니다.
+
+#### 병렬 빌드 (고급)
+Client와 Server를 별도 서비스로 분리하면 병렬 빌드가 가능하지만, 현재는 통합 배포가 더 간단합니다.
+
+### 5. 빌드 시간 측정
+
+Render 대시보드의 **Events** 탭에서 빌드 시간을 확인할 수 있습니다:
+- 일반적으로 첫 빌드: 5-10분
+- 캐시 활용 시: 2-5분
+- 소스 코드만 변경: 1-3분
+
+### 6. 문제 해결
+
+**빌드가 너무 오래 걸리는 경우:**
+1. Render 로그에서 병목 지점 확인
+2. `.dockerignore`에 불필요한 파일이 포함되지 않았는지 확인
+3. 의존성 파일(`package.json`, `requirements.txt`)이 자주 변경되지 않도록 관리
+
+**캐시가 작동하지 않는 경우:**
+1. Dockerfile의 레이어 순서 확인
+2. Render의 빌드 캐시 설정 확인
+3. 필요시 `--no-cache` 옵션으로 강제 재빌드 후 다시 시도
 
 ## 📚 추가 리소스
 
