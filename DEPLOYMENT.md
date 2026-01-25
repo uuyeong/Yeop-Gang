@@ -4,10 +4,63 @@
 
 ## 📋 목차
 
-1. [로컬 Docker 실행](#로컬-docker-실행)
-2. [Render 배포](#render-배포)
-3. [환경 변수 설정](#환경-변수-설정)
-4. [문제 해결](#문제-해결)
+1. [무료 배포 (render.yaml 없이)](#-무료-배포-renderyaml-없이)
+2. [로컬 Docker 실행](#-로컬-docker-실행)
+3. [Render 배포 (render.yaml 사용)](#-render-배포-renderyaml-사용)
+4. [환경 변수 설정](#환경-변수-설정)
+5. [문제 해결](#-문제-해결)
+
+---
+
+## 🆓 무료 배포 (render.yaml 없이)
+
+**render.yaml은 필수가 아닙니다.** Render 대시보드에서 서비스를 직접 만들면 됩니다. Dockerfile만 있으면 배포할 수 있습니다.
+
+### 1. 백엔드 배포
+
+1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
+2. GitHub 저장소 연결 후 이 프로젝트 선택
+3. 아래처럼 설정:
+   - **Name**: `yeopgang-backend` (원하는 이름)
+   - **Region**: Singapore (가까운 지역)
+   - **Runtime**: **Docker**
+   - **Dockerfile Path**: `server/Dockerfile`
+   - **Docker Context**: `server`
+   - **Plan**: **Free**
+4. **Environment** 탭에서 **Add Environment Variable**:
+   - `OPENAI_API_KEY` = (본인 OpenAI 키)
+   - `DATABASE_URL` = `sqlite:///./data/yeopgang.db`
+   - `DATA_ROOT` = `data`
+   - `CHROMA_DB_PATH` = `data/chroma`
+5. **Create Web Service** 클릭
+
+배포가 끝나면 **URL**이 나옵니다. 예: `https://yeopgang-backend.onrender.com` → **복사해 두기.**
+
+### 2. 프론트엔드 배포
+
+1. **New +** → **Web Service** → 같은 저장소 선택
+2. 설정:
+   - **Name**: `yeopgang-frontend`
+   - **Runtime**: **Docker**
+   - **Dockerfile Path**: `client/Dockerfile`
+   - **Docker Context**: `client`
+   - **Plan**: **Free**
+3. **Environment**:
+   - `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com`  
+     (위에서 복사한 백엔드 URL로 **반드시** 변경)
+4. **Create Web Service** 클릭
+
+### 3. 무료 플랜 안내
+
+| 항목 | 내용 |
+|------|------|
+| **비용** | 0원 (Render Free) |
+| **슬립** | 15분 미사용 시 슬립 → 첫 요청 시 30초~1분 정도 깨우는 시간 |
+| **디스크** | **영구 디스크 없음.** SQLite DB·업로드 파일은 **재배포/재시작 시 사라집니다.** |
+| **용도** | 데모·테스트용으로 적합. 실제 서비스·데이터 보존이 필요하면 **Starter 유료 + 디스크** 필요 |
+
+데이터를 남기고 싶다면 [Render 플랜](https://render.com/pricing)에서 **Starter** 이상 + **Persistent Disk** 연결이 필요합니다.  
+**render.yaml**은 나중에 Blueprint로 한 번에 배포하고 싶을 때만 쓰면 됩니다.
 
 ## 🐳 로컬 Docker 실행
 
@@ -57,16 +110,18 @@
    docker-compose down
    ```
 
-## ☁️ Render 배포
+## ☁️ Render 배포 (render.yaml 사용)
+
+**render.yaml 없이** 무료 배포하려면 위 [무료 배포 (render.yaml 없이)](#-무료-배포-renderyaml-없이) 섹션을 따르면 됩니다.
+
+아래는 **Blueprint**(render.yaml)로 한 번에 배포하는 방법입니다.
 
 ### 사전 준비
 
 1. [Render](https://render.com) 계정 생성
 2. GitHub 저장소 연결 (또는 GitLab, Bitbucket)
 
-### 배포 단계
-
-#### 방법 1: render.yaml 사용 (권장)
+### 배포 단계 (Blueprint)
 
 1. **저장소에 render.yaml 커밋**
 
@@ -83,36 +138,7 @@
    - GitHub 저장소 연결
    - Render가 `render.yaml`을 자동으로 감지하여 서비스 생성
 
-#### 방법 2: 수동 배포
-
-**백엔드 서비스 배포:**
-
-1. Render 대시보드에서 "New" → "Web Service" 선택
-2. GitHub 저장소 연결
-3. 설정:
-   - **Name**: `yeopgang-backend`
-   - **Runtime**: `Docker`
-   - **Dockerfile Path**: `./server/Dockerfile`
-   - **Docker Context**: `./server`
-   - **Plan**: Free 또는 Starter (필요에 따라)
-4. 환경 변수 설정 (아래 참조)
-5. 디스크 추가:
-   - Name: `yeopgang-data`
-   - Mount Path: `/app/data`
-   - Size: 1GB (필요에 따라 조정)
-
-**프론트엔드 서비스 배포:**
-
-1. Render 대시보드에서 "New" → "Web Service" 선택
-2. GitHub 저장소 연결
-3. 설정:
-   - **Name**: `yeopgang-frontend`
-   - **Runtime**: `Docker`
-   - **Dockerfile Path**: `./client/Dockerfile`
-   - **Docker Context**: `./client`
-   - **Plan**: Free 또는 Starter
-4. 환경 변수 설정:
-   - `NEXT_PUBLIC_API_URL`: 백엔드 서비스의 URL (예: `https://yeopgang-backend.onrender.com`)
+> **참고**: render.yaml의 `disk` 설정은 **유료 플랜(Starter 이상)**에서만 동작합니다. 무료는 디스크 없이 배포됩니다.
 
 ### 환경 변수 설정
 
