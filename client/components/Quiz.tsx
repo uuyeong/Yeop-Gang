@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { CheckCircle2, XCircle, Lightbulb, AlertCircle, Trophy, RefreshCw, Send } from "lucide-react";
 import { apiPost, apiGet, handleApiError } from "../lib/api";
 
@@ -53,7 +53,7 @@ export default function Quiz({ courseId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
 
-  const generateQuiz = async () => {
+  const generateQuiz = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     setIsGraded(false);
@@ -86,7 +86,7 @@ export default function Quiz({ courseId }: Props) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [courseId]);
 
   const parseQuizFromAnswer = (answer: string): QuizQuestion[] => {
     const questions: QuizQuestion[] = [];
@@ -270,7 +270,7 @@ export default function Quiz({ courseId }: Props) {
     fetchCourseInfo();
     // 컴포넌트 마운트 시 자동으로 퀴즈 생성
     generateQuiz();
-  }, [courseId]);
+  }, [courseId, generateQuiz]);
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
