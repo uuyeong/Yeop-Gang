@@ -333,6 +333,7 @@ export default function ChatPanel({ courseId, courseTitle, instructorName, onTim
               {/* 프로필 이미지 (assistant만) */}
               {msg.role === "assistant" && (
                 <div className="flex-shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src="https://i.ibb.co/27yY0pLS/default-profile.png"
                     alt="옆강 봇"
@@ -393,6 +394,7 @@ export default function ChatPanel({ courseId, courseTitle, instructorName, onTim
         {isLoading && (
           <div className="flex items-start gap-2">
             <div className="flex-shrink-0">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="https://i.ibb.co/27yY0pLS/default-profile.png"
                 alt="옆강 봇"

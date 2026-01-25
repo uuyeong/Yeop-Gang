@@ -1,6 +1,3 @@
-# 통합 Dockerfile - Client와 Server를 하나의 컨테이너에서 실행
-# 멀티스테이지 빌드 사용
-
 # ==================== Client 빌드 스테이지 ====================
 FROM node:20-alpine AS client-builder
 
@@ -21,7 +18,7 @@ FROM python:3.11-slim AS server-builder
 
 WORKDIR /app/server
 
-# 시스템 의존성 설치
+# 시스템 의존성 설치 (ffmpeg for Whisper STT)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
@@ -51,7 +48,7 @@ COPY --from=server-builder /usr/local/lib/python3.11/site-packages /usr/local/li
 COPY --from=server-builder /usr/local/bin /usr/local/bin
 COPY server/ ./server/
 
-# Client 빌드 결과 복사
+# Client 빌드 결과 복사 (standalone 출력)
 COPY --from=client-builder /app/client/public ./client/public
 COPY --from=client-builder /app/client/.next/standalone ./client/
 COPY --from=client-builder /app/client/.next/static ./client/.next/static

@@ -32,6 +32,7 @@ export default function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
     return () => {
       window.removeEventListener("storage", handleStorageChange);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트/storage 시에만 checkAuth 호출
   }, []);
 
   const loadProfileImage = () => {
@@ -106,6 +107,7 @@ export default function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
                 )}
                 <div className="flex items-center gap-2 text-sm text-slate-600">
                   {profileImageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- 동적 API URL, onError/onLoad 사용
                     <img
                       src={profileImageUrl}
                       alt="프로필"
