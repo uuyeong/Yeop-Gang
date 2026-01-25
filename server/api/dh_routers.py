@@ -367,7 +367,7 @@ async def instructor_upload(
                 logger.info(f"✏️ 강사 이름 업데이트 - {instructor.name} -> {instructor_name.strip()}")
                 instructor.name = instructor_name.strip()
         
-        # 챕터인 경우 부모 강의 확인
+        # 챕터인 경우 부모 강의 확인 및 과목 가져오기
         if parent_course_id:
             logger.info(f"🔍 부모 강의 확인 중 - parent_course_id: {parent_course_id}")
             parent_course = session.get(Course, parent_course_id)
@@ -383,6 +383,10 @@ async def instructor_upload(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="부모 강의가 다른 강사에게 속해 있습니다",
                 )
+            # 챕터인 경우 부모 강의의 과목 사용
+            if not course_category or not course_category.strip():
+                course_category = parent_course.category
+                logger.info(f"📚 챕터 업로드: 부모 강의의 과목 사용 - {course_category}")
         
         logger.info(f"🔍 강의 정보 확인 중 - course_id: {course_id}")
         course = session.get(Course, course_id)
@@ -428,7 +432,7 @@ async def instructor_upload(
                             "id": course_id,
                             "instructor_id": instructor_id,
                             "title": course_title.strip() if course_title.strip() else course_id,
-                            "category": course_category.strip() if course_category.strip() else None,
+                            "category": course_category.strip() if course_category and course_category.strip() else None,
                             "parent_course_id": parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
                             "chapter_number": chapter_number,
                             "status": CourseStatus.processing.value,
@@ -451,7 +455,7 @@ async def instructor_upload(
                         id=course_id,
                         instructor_id=instructor_id,
                         title=course_title.strip() if course_title.strip() else course_id,
-                        category=course_category.strip() if course_category.strip() else None,
+                        category=course_category.strip() if course_category and course_category.strip() else None,
                         parent_course_id=parent_course_id.strip() if parent_course_id and parent_course_id.strip() else None,
                         chapter_number=chapter_number,
                     )

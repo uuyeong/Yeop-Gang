@@ -190,9 +190,22 @@ def _generate_persona_response(
         course = session.get(Course, course_id)
         if course:
             # 강의 정보 저장
+            parent_course_title = None
+            chapter_number = None
+            
+            # 챕터인 경우 부모 강의 정보 가져오기
+            if course.parent_course_id:
+                parent_course = session.get(Course, course.parent_course_id)
+                if parent_course:
+                    parent_course_title = parent_course.title
+                chapter_number = course.chapter_number
+            
             course_info = {
-                "title": course.title,
+                "title": course.title,  # 현재 강의명 (챕터명 또는 부모 강의명)
                 "category": course.category,
+                "parent_course_title": parent_course_title,  # 부모 강의명 (챕터인 경우)
+                "chapter_number": chapter_number,  # 회차 번호 (챕터인 경우)
+                "is_chapter": course.parent_course_id is not None,  # 챕터 여부
             }
             
             instructor = session.get(Instructor, course.instructor_id)
@@ -204,23 +217,39 @@ def _generate_persona_response(
                 }
         
         # 페르소나 로드 (DB 우선)
+        # 챕터인 경우 부모 강의의 persona_profile 사용
         persona = None
-        if course and course.persona_profile:
-            try:
-                persona_dict = json.loads(course.persona_profile)
-                persona = create_persona_prompt(persona_dict)
-                if instructor_info:
-                    instructor_context = ""
-                    if instructor_info.get("name"):
-                        instructor_context += f"강사 이름: {instructor_info['name']}\n"
-                    if instructor_info.get("specialization"):
-                        instructor_context += f"전문 분야: {instructor_info['specialization']}\n"
-                    if instructor_info.get("bio"):
-                        instructor_context += f"자기소개/배경: {instructor_info['bio']}\n"
-                    if instructor_context and "강사 정보" not in persona:
-                        persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
-            except Exception as e:
-                print(f"[PERSONA RESPONSE] ⚠️ 페르소나 로드 실패: {e}")
+        persona_profile_json = None
+        if course:
+            # 챕터인 경우 부모 강의의 persona_profile 확인
+            if course.parent_course_id:
+                parent_course = session.get(Course, course.parent_course_id)
+                if parent_course and parent_course.persona_profile:
+                    persona_profile_json = parent_course.persona_profile
+                elif course.persona_profile:
+                    # 부모 강의 말투가 없으면 현재 강의 말투 사용 (fallback)
+                    persona_profile_json = course.persona_profile
+            else:
+                # 부모 강의인 경우 현재 강의의 persona_profile 사용
+                if course.persona_profile:
+                    persona_profile_json = course.persona_profile
+            
+            if persona_profile_json:
+                try:
+                    persona_dict = json.loads(persona_profile_json)
+                    persona = create_persona_prompt(persona_dict)
+                    if instructor_info:
+                        instructor_context = ""
+                        if instructor_info.get("name"):
+                            instructor_context += f"강사 이름: {instructor_info['name']}\n"
+                        if instructor_info.get("specialization"):
+                            instructor_context += f"전문 분야: {instructor_info['specialization']}\n"
+                        if instructor_info.get("bio"):
+                            instructor_context += f"자기소개/배경: {instructor_info['bio']}\n"
+                        if instructor_context and "강사 정보" not in persona:
+                            persona = f"{persona}\n\n강사 정보:\n{instructor_context}"
+                except Exception as e:
+                    print(f"[PERSONA RESPONSE] ⚠️ 페르소나 로드 실패: {e}")
         
         # 페르소나가 없으면 기본 페르소나 사용
         if not persona:
@@ -243,11 +272,29 @@ def _generate_persona_response(
         course_info_text = ""
         course_title = None
         course_category = None
+        parent_course_title = None
+        chapter_number = None
+        is_chapter = False
+        
         if course_info:
             course_title = course_info.get("title")
             course_category = course_info.get("category")
-            if course_title:
-                course_info_text += f"**강의명**: {course_title}\n"
+            parent_course_title = course_info.get("parent_course_title")
+            chapter_number = course_info.get("chapter_number")
+            is_chapter = course_info.get("is_chapter", False)
+            
+            # 챕터인 경우: 부모 강의명을 강의명으로, 현재 강의명은 회차로 표시
+            if is_chapter and parent_course_title:
+                course_info_text += f"**강의명**: {parent_course_title}\n"
+                if chapter_number:
+                    course_info_text += f"**회차**: {chapter_number}강 ({course_title})\n"
+                else:
+                    course_info_text += f"**회차**: {course_title}\n"
+            else:
+                # 부모 강의인 경우
+                if course_title:
+                    course_info_text += f"**강의명**: {course_title}\n"
+            
             if course_category:
                 course_info_text += f"**과목**: {course_category}\n"
         
@@ -326,7 +373,10 @@ def _generate_persona_response(
             "- 강사로서 자연스럽고 친근한 말투를 사용하세요.\n"
             "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
             "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
-            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 과목을 자연스럽게 답변하세요.\n"
+            "- **반복 표현 지양**: 같은 문구를 반복하지 마세요. 예를 들어, '질문해 주세요', '말씀해 주세요', '언제든지 물어보세요' 같은 표현을 매번 반복하지 말고, 다양한 표현으로 대체하세요. (예: '궁금한 점이 있으면 알려주세요', '더 알고 싶은 게 있으면 말해주세요', '모르는 부분이 있으면 언제든지 물어봐도 돼요', '추가로 궁금한 게 있으면 말해주세요', '다른 질문이 있으면 언제든지 해도 돼요' 등)\n"
+            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 **강의명**(부모 강의명)을 답변하세요. 챕터인 경우 '1강', '2강' 같은 회차명이 아니라 부모 강의의 전체 강의명(예: '수능 완성 스페인어 완전정복')을 답변하세요.\n"
+            "- **회차 정보**: 학생이 '몇 회차야?', '몇 강이야?' 같은 질문을 하면, 위에 명시된 **회차** 정보를 답변하세요. 챕터인 경우 회차 번호(예: '1강', '2강')를, 부모 강의인 경우 회차 정보가 없다고 답변하세요.\n"
+            "- **강의명과 회차 구분**: '강의명'은 부모 강의의 전체 이름(예: '수능 완성 스페인어 완전정복')이고, '회차'는 챕터 번호(예: '1강', '2강')입니다. 이 둘을 명확히 구분하여 답변하세요.\n"
             "- **강사 소개 질문**: 학생이 '누구세요?', '선생님 이름이 뭐예요?', '강사님은 누구세요?' 같은 질문을 하면, 위에 명시된 강사 이름을 자연스럽게 답변하세요.\n"
             "- **정체성 인식**: 당신은 위에 명시된 과목(예: 영어, 수학 등)을 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/과목에 명시된 과목의 선생님으로서 답변하세요. 예를 들어, 과목이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 문학 작품을 독해하는 수업이어도 당신은 영어 선생님으로서 문법, 어순 등 영어를 가르치는 선생님으로서 답변하세요."
         )
@@ -1204,7 +1254,7 @@ def ask(
     # 인사말이면 페르소나 적용된 답변 생성
     if is_greeting:
         answer = _generate_persona_response(
-            user_message=f"학생이 '{payload.question}'라고 인사했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+            user_message=f"학생이 '{payload.question}'라고 인사했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 알려달라고 말해주세요. '질문해 주세요', '말씀해 주세요' 같은 표현을 반복하지 말고 다양한 표현을 사용하세요.",
             course_id=payload.course_id,
             session=session,
             pipeline=pipeline,
@@ -1249,7 +1299,7 @@ def ask(
                 context = f"최근에 제가 설명한 내용: {recent_assistant[:200]}"
         
         answer = _generate_persona_response(
-            user_message=f"학생이 '{payload.question}'라고 긍정적인 피드백을 주었습니다. 강사로서 기쁘게 반응하고, 더 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+            user_message=f"학생이 '{payload.question}'라고 긍정적인 피드백을 주었습니다. 강사로서 기쁘게 반응하고, 더 궁금한 점이 있으면 알려달라고 말해주세요. '질문해 주세요', '말씀해 주세요' 같은 표현을 반복하지 말고 다양한 표현을 사용하세요.",
             course_id=payload.course_id,
             session=session,
             pipeline=pipeline,
@@ -1323,7 +1373,7 @@ def ask(
         # 반복 질문이고 이전 답변이 있으면 페르소나 적용된 답변 생성
         if is_repeated_question and previous_answer:
             answer = _generate_persona_response(
-                user_message=f"학생이 이전에 물어본 내용과 비슷한 질문을 다시 했습니다: '{payload.question}'. 이전에 제가 설명한 내용은 다음과 같습니다: {previous_answer[:300]}. 강사로서 자연스럽게 이전 답변을 참고하여 다시 설명해주되, 더 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+                user_message=f"학생이 이전에 물어본 내용과 비슷한 질문을 다시 했습니다: '{payload.question}'. 이전에 제가 설명한 내용은 다음과 같습니다: {previous_answer[:300]}. 강사로서 자연스럽게 이전 답변을 참고하여 다시 설명해주되, 더 궁금한 점이 있으면 알려달라고 말해주세요. '질문해 주세요', '말씀해 주세요' 같은 표현을 반복하지 말고 다양한 표현을 사용하세요.",
                 course_id=payload.course_id,
                 session=session,
                 pipeline=pipeline,
@@ -1361,7 +1411,7 @@ def ask(
             minutes = int(payload.current_time // 60)
             seconds = int(payload.current_time % 60)
             answer = _generate_persona_response(
-                user_message=f"학생이 현재 시청 중인 시간({minutes}분 {seconds}초)에 대해 물어봤습니다: '{payload.question}'. 강사로서 현재 시간을 알려주고, 해당 시간대의 강의 내용에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요.",
+                user_message=f"학생이 현재 시청 중인 시간({minutes}분 {seconds}초)에 대해 물어봤습니다: '{payload.question}'. 강사로서 현재 시간을 알려주고, 해당 시간대의 강의 내용에 대해 궁금한 점이 있으면 알려달라고 말해주세요. '질문해 주세요', '말씀해 주세요' 같은 표현을 반복하지 말고 다양한 표현을 사용하세요.",
                 course_id=payload.course_id,
                 session=session,
                 pipeline=pipeline,
@@ -2042,9 +2092,23 @@ def get_greeting(
         course_info = None
         course = session.get(Course, course_id)
         if course:
+            # 강의 정보 저장
+            parent_course_title = None
+            chapter_number = None
+            
+            # 챕터인 경우 부모 강의 정보 가져오기
+            if course.parent_course_id:
+                parent_course = session.get(Course, course.parent_course_id)
+                if parent_course:
+                    parent_course_title = parent_course.title
+                chapter_number = course.chapter_number
+            
             course_info = {
-                "title": course.title,
+                "title": course.title,  # 현재 강의명 (챕터명 또는 부모 강의명)
                 "category": course.category,
+                "parent_course_title": parent_course_title,  # 부모 강의명 (챕터인 경우)
+                "chapter_number": chapter_number,  # 회차 번호 (챕터인 경우)
+                "is_chapter": course.parent_course_id is not None,  # 챕터 여부
             }
             instructor = session.get(Instructor, course.instructor_id)
             if instructor:
@@ -2056,7 +2120,7 @@ def get_greeting(
         
         # 페르소나 기반 인사말 생성
         greeting_message = _generate_persona_response(
-            user_message="학생이 처음 챗봇을 시작했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 언제든지 물어보라고 말해주세요. 강사의 말투와 특징을 잘 살려서 인사해주세요.",
+            user_message="학생이 처음 챗봇을 시작했습니다. 강사로서 자연스럽고 친근하게 인사하고, 강의에 대해 궁금한 점이 있으면 알려달라고 말해주세요. 강사의 말투와 특징을 잘 살려서 인사해주세요. '질문해 주세요', '말씀해 주세요' 같은 표현을 반복하지 말고 다양한 표현을 사용하세요.",
             course_id=course_id,
             session=session,
             pipeline=pipeline,
