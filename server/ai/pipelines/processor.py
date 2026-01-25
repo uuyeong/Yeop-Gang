@@ -573,7 +573,7 @@ def process_course_assets(
                             print(f"[{course_id}] ♻️ 부모 강의 말투 재사용 (API 호출 생략)")
                         else:
                             # 부모 강의 말투가 없으면 새로 분석
-                            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 5분 분석)...")
+                            print(f"[{course_id}] 🧑‍🏫 Style Analyzer 실행 (초반 10~20분 분석)...")
                             try:
                                 persona_profile = analyze_instructor_style(segments, settings=settings)
                                 persona_profile_json = json.dumps(persona_profile, ensure_ascii=False)

@@ -458,9 +458,21 @@ class RAGPipeline:
                 with Session(engine) as session:
                     course = session.get(Course, course_id)
                     if course:
+                        # 부모 강의 정보 가져오기 (챕터인 경우)
+                        parent_course_title = None
+                        chapter_number = None
+                        if course.parent_course_id:
+                            parent_course = session.get(Course, course.parent_course_id)
+                            if parent_course:
+                                parent_course_title = parent_course.title
+                            chapter_number = course.chapter_number
+                        
                         course_info = {
                             "title": course.title,
                             "category": course.category,
+                            "parent_course_title": parent_course_title,
+                            "chapter_number": chapter_number,
+                            "is_chapter": course.parent_course_id is not None,
                         }
             except Exception as e:
                 print(f"[RAG DEBUG] ⚠️ DB에서 course_info 로드 실패: {e}")
@@ -533,9 +545,9 @@ class RAGPipeline:
             if segment_docs:
                 segment_sorted = sorted(
                     zip(segment_docs, segment_metas, segment_scores),
-                    key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
-                    reverse=True
-                )
+                key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
+                reverse=True
+            )
                 filtered_docs.extend([doc for doc, _, _ in segment_sorted])
                 filtered_metas.extend([meta for _, meta, _ in segment_sorted])
                 print(f"[RAG DEBUG] 🎤 세그먼트를 보조로 배치 ({len(segment_docs)}개)")
@@ -663,16 +675,28 @@ class RAGPipeline:
                 with Session(engine) as session:
                     course = session.get(Course, course_id)
                     if course:
-                        # 강의 정보 저장 (강의명, 카테고리)
+                        # 강의 정보 저장 (강의명, 과목)
+                        # 부모 강의 정보 가져오기 (챕터인 경우)
+                        parent_course_title = None
+                        chapter_number = None
+                        if course.parent_course_id:
+                            parent_course = session.get(Course, course.parent_course_id)
+                            if parent_course:
+                                parent_course_title = parent_course.title
+                            chapter_number = course.chapter_number
+                        
                         course_info = {
                             "title": course.title,
                             "category": course.category,
+                            "parent_course_title": parent_course_title,
+                            "chapter_number": chapter_number,
+                            "is_chapter": course.parent_course_id is not None,
                         }
             except Exception as e:
                 print(f"[RAG DEBUG] ⚠️ DB에서 course_info 로드 실패: {e}")
                 course_info = None
         
-        # persona_profile 로드
+        # persona_profile 로드 (챕터인 경우 부모 강의의 persona_profile 사용)
         try:
             from sqlmodel import Session
             from core.db import engine
@@ -680,13 +704,29 @@ class RAGPipeline:
             
             with Session(engine) as session:
                 course = session.get(Course, course_id)
-                if course and course.persona_profile:
-                    persona_profile_json = course.persona_profile
-                    import json
-                    persona_dict = json.loads(persona_profile_json)
-                    from ai.style_analyzer import create_persona_prompt
-                    persona = create_persona_prompt(persona_dict)
-                    print(f"[RAG DEBUG] ✅ DB에서 persona_profile 로드 (course_id={course_id})")
+                if course:
+                    # 챕터인 경우 부모 강의의 persona_profile 확인
+                    if course.parent_course_id:
+                        parent_course = session.get(Course, course.parent_course_id)
+                        if parent_course and parent_course.persona_profile:
+                            persona_profile_json = parent_course.persona_profile
+                            print(f"[RAG DEBUG] ✅ 부모 강의 persona_profile 로드 (parent_course_id={course.parent_course_id})")
+                        elif course.persona_profile:
+                            # 부모 강의 말투가 없으면 현재 강의 말투 사용 (fallback)
+                            persona_profile_json = course.persona_profile
+                            print(f"[RAG DEBUG] ✅ 현재 강의 persona_profile 로드 (fallback, course_id={course_id})")
+                    else:
+                        # 부모 강의인 경우 현재 강의의 persona_profile 사용
+                        if course.persona_profile:
+                            persona_profile_json = course.persona_profile
+                            print(f"[RAG DEBUG] ✅ 부모 강의 persona_profile 로드 (course_id={course_id})")
+                    
+                    if persona_profile_json:
+                        import json
+                        persona_dict = json.loads(persona_profile_json)
+                        from ai.style_analyzer import create_persona_prompt
+                        persona = create_persona_prompt(persona_dict)
+                        print(f"[RAG DEBUG] ✅ persona_profile 파싱 완료 (course_id={course_id})")
         except Exception as e:
             print(f"[RAG DEBUG] ⚠️ DB에서 persona_profile 로드 실패: {e}")
         
@@ -879,17 +919,35 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
                 "answer": answer,
             }
         
-        # 강의 정보 추가 (강의명, 카테고리)
+        # 강의 정보 추가 (강의명, 과목, 회차)
         course_info_text = ""
         course_title = None
         course_category = None
+        parent_course_title = None
+        chapter_number = None
+        is_chapter = False
+        
         if course_info:
             course_title = course_info.get("title")
             course_category = course_info.get("category")
-            if course_title:
-                course_info_text += f"**강의명**: {course_title}\n"
+            parent_course_title = course_info.get("parent_course_title")
+            chapter_number = course_info.get("chapter_number")
+            is_chapter = course_info.get("is_chapter", False)
+            
+            # 챕터인 경우: 부모 강의명을 강의명으로, 현재 강의명은 회차로 표시
+            if is_chapter and parent_course_title:
+                course_info_text += f"**강의명**: {parent_course_title}\n"
+                if chapter_number:
+                    course_info_text += f"**회차**: {chapter_number}강 ({course_title})\n"
+                else:
+                    course_info_text += f"**회차**: {course_title}\n"
+            else:
+                # 부모 강의인 경우
+                if course_title:
+                    course_info_text += f"**강의명**: {course_title}\n"
+            
             if course_category:
-                course_info_text += f"**카테고리**: {course_category}\n"
+                course_info_text += f"**과목**: {course_category}\n"
         
         # 강사 이름 추출 (페르소나나 instructor_info에서)
         instructor_name = None
@@ -905,7 +963,7 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
         # 강의명 기반 주제 추출 (강의명에서 핵심 주제 추출)
         subject = None
         if course_title:
-            # 카테고리가 있으면 카테고리를 주제로 우선 사용
+            # 과목이 있으면 과목을 주제로 우선 사용
             if course_category:
                 subject = course_category.strip()
             else:
@@ -971,8 +1029,11 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
             "- 코스 범위 밖 질문은 답하지 않습니다.\n"
             "- 이전 대화 내용도 참고하여 일관성 있게 답변하세요.\n"
             "- '여러분', '학생들', '챗봇' 같은 표현 대신 직접적으로 '저는', '제가', '제가 설명한' 같은 표현을 사용하세요.\n"
-            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 강의명과 카테고리를 자연스럽게 답변하세요.\n"
-            "- **정체성 인식**: 당신은 위에 명시된 주제(예: 영어, 수학 등)를 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/카테고리에 명시된 주제의 선생님으로서 답변하세요. 예를 들어, 강의명이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 고전 시가를 읽는 수업이어도 당신은 영어 선생님으로서 답변하세요.\n"
+            "- **반복 표현 지양**: 같은 문구를 반복하지 마세요. 예를 들어, '질문해 주세요', '말씀해 주세요', '언제든지 물어보세요' 같은 표현을 매번 반복하지 말고, 다양한 표현으로 대체하세요. (예: '궁금한 점이 있으면 알려주세요', '더 알고 싶은 게 있으면 말해주세요', '모르는 부분이 있으면 언제든지 물어봐도 돼요', '추가로 궁금한 게 있으면 말해주세요' 등)\n"
+            "- **강의 정보 질문**: 학생이 '무슨 강의야?', '이 강의가 뭐야?', '강의명이 뭐야?' 같은 질문을 하면, 위에 명시된 **강의명**(부모 강의명)을 답변하세요. 챕터인 경우 '1강', '2강' 같은 회차명이 아니라 부모 강의의 전체 강의명(예: '수능 완성 스페인어 완전정복')을 답변하세요.\n"
+            "- **회차 정보**: 학생이 '몇 회차야?', '몇 강이야?' 같은 질문을 하면, 위에 명시된 **회차** 정보를 답변하세요. 챕터인 경우 회차 번호(예: '1강', '2강')를, 부모 강의인 경우 회차 정보가 없다고 답변하세요.\n"
+            "- **강의명과 회차 구분**: '강의명'은 부모 강의의 전체 이름(예: '수능 완성 스페인어 완전정복')이고, '회차'는 챕터 번호(예: '1강', '2강')입니다. 이 둘을 명확히 구분하여 답변하세요.\n"
+            "- **정체성 인식**: 당신은 위에 명시된 과목(예: 영어, 수학 등)을 가르치는 선생님입니다. 강의 내용이 무엇이든 상관없이, 강의명/과목에 명시된 과목의 선생님으로서 답변하세요. 예를 들어, 과목이 '영어'라면 당신은 '영어 선생님'이며, 강의 내용이 문학 작품을 독해하는 수업이어도 당신은 영어 선생님으로서 문법, 어순 등 영어를 가르치는 선생님으로서 답변하세요.\n"
             "- **수학 공식 표현**: 수학 공식이나 수식을 표현할 때는 LaTeX 문법(예: \\(, \\), \\[, \\])을 절대 사용하지 마세요. 대신 일반 텍스트로 읽기 쉽게 표현하세요.\n"
             "  * 예시: 'y^2 = 4px' (y의 제곱은 4px와 같다), 'x^2 + y^2 = r^2' (x의 제곱 더하기 y의 제곱은 r의 제곱과 같다)\n"
             "  * 분수는 'a/b' 형식으로 표현 (예: '1/2', '3/4')\n"

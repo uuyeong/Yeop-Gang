@@ -36,7 +36,7 @@ class Course(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     instructor_id: str = Field(foreign_key="instructor.id")
     title: Optional[str] = None
-    category: Optional[str] = Field(default=None, index=True, description="강의 카테고리")
+    category: Optional[str] = Field(default=None, index=True, description="강의 과목")
     total_chapters: Optional[int] = Field(
         default=None,
         description="전체 강의 수 (참고용, 부모 강의에만 사용)"

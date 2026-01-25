@@ -211,7 +211,7 @@ export default function InstructorChaptersPage() {
                 </p>
                 {courseInfo?.category && (
                   <p className="mt-0.5 text-xs text-slate-400">
-                    카테고리: {courseInfo.category}
+                    과목: {courseInfo.category}
                   </p>
                 )}
               </div>

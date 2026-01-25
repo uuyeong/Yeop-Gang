@@ -47,7 +47,7 @@ export default function StudentCoursesPage() {
       
       const courses = await apiGet<Course[]>(`/api/courses?${params.toString()}`);
       
-      // 카테고리 목록 추출
+      // 과목 목록 추출
       const categorySet = new Set<string>();
       courses.forEach((course) => {
         if (course.category) {
@@ -138,7 +138,7 @@ export default function StudentCoursesPage() {
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="w-full appearance-none rounded-lg border border-slate-300 bg-white pl-10 pr-8 py-2.5 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               >
-                <option value="">전체 카테고리</option>
+                <option value="">전체 과목</option>
                 {categories.map((cat) => (
                   <option key={cat} value={cat}>
                     {cat}

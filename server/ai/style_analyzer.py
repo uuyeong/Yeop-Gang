@@ -2,7 +2,7 @@
 Style Analyzer Module
 강사 스타일 자동 분석 및 동적 프롬프트 생성
 
-- 영상이 업로드되고 STT가 완료되면, 스크립트 초반 5분 분량을 분석
+- 영상이 업로드되고 STT가 완료되면, 스크립트 초반 10~20분 분량을 분석
 - 출력값: tone(말투), philosophy(교육 철학), signature_keywords(자주 쓰는 말)를 담은 JSON
 """
 from typing import Dict, List, Any, Optional
@@ -19,35 +19,48 @@ except Exception:
     APIError = None  # type: ignore
 
 
-def extract_first_5_minutes(segments: List[Dict[str, Any]]) -> str:
+def extract_first_10_to_20_minutes(segments: List[Dict[str, Any]]) -> str:
     """
-    세그먼트에서 초반 5분(300초) 분량의 텍스트 추출
+    세그먼트에서 초반 10~20분 분량의 텍스트 추출
+    - 최소 10분(600초), 최대 20분(1200초) 분량 추출
+    - 10분 미만이면 전체 사용, 20분 초과면 20분까지만 사용
     
     Args:
         segments: transcript segments (start, end, text 포함)
         
     Returns:
-        초반 5분 분량의 텍스트
+        초반 10~20분 분량의 텍스트
     """
     if not segments:
         return ""
     
-    five_minutes = 300.0  # 5분 = 300초
+    min_minutes = 600.0  # 최소 10분 = 600초
+    max_minutes = 1200.0  # 최대 20분 = 1200초
     text_parts = []
     
     for seg in segments:
         start_time = seg.get("start", 0.0)
         
-        # 5분 이내 세그먼트만 포함
-        if start_time <= five_minutes:
+        # 20분 이내 세그먼트만 포함
+        if start_time <= max_minutes:
             text = seg.get("text", "").strip()
             if text:
                 text_parts.append(text)
         else:
-            # 5분을 초과하면 중단
+            # 20분을 초과하면 중단
             break
     
-    return " ".join(text_parts)
+    extracted_text = " ".join(text_parts)
+    
+    # 최소 10분 분량이 확보되었는지 확인
+    # (세그먼트의 마지막 시간이 10분 이상인지 확인)
+    if segments:
+        last_segment_time = segments[-1].get("start", 0.0) if len(segments) > 0 else 0.0
+        if last_segment_time < min_minutes and len(segments) > 0:
+            # 10분 미만이면 전체 세그먼트 사용 (가능한 만큼)
+            print(f"[Style Analyzer] ⚠️ 강의 길이가 10분 미만입니다 ({last_segment_time:.1f}초). 전체 강의를 사용합니다.")
+    
+    return extracted_text
 
 
 def analyze_instructor_style(
@@ -55,7 +68,7 @@ def analyze_instructor_style(
     settings: Optional[AISettings] = None
 ) -> Dict[str, Any]:
     """
-    강사 스타일 분석 (초반 5분 분량)
+    강사 스타일 분석 (초반 10~20분 분량)
     
     Args:
         segments: transcript segments
@@ -70,8 +83,8 @@ def analyze_instructor_style(
     """
     settings = settings or AISettings()
     
-    # 초반 5분 분량 추출
-    sample_text = extract_first_5_minutes(segments)
+    # 초반 10~20분 분량 추출
+    sample_text = extract_first_10_to_20_minutes(segments)
     
     if not sample_text or len(sample_text.strip()) < 100:
         # 샘플이 너무 짧으면 fallback
@@ -93,10 +106,10 @@ def analyze_instructor_style(
     client = OpenAI(api_key=settings.openai_api_key)
     
     # LLM 프롬프트 구성
-    analysis_prompt = f"""다음은 강사의 강의 초반 5분 분량 텍스트입니다. 이 강사의 말투, 교육 철학, 자주 사용하는 표현을 분석해주세요.
+    analysis_prompt = f"""다음은 강사의 강의 초반 10~20분 분량 텍스트입니다. 이 강사의 말투, 교육 철학, 자주 사용하는 표현을 분석해주세요.
 
-강의 샘플 (초반 5분):
-{sample_text[:3000]}  # 최대 3000자
+강의 샘플 (초반 10~20분):
+{sample_text[:5000]}  # 최대 5000자 (10~20분 분량이므로 더 많은 텍스트 포함)
 
 분석할 요소:
 1. **tone (말투)**: 종결어미 패턴, 어투 (정중함/친근함/격식/캐주얼), 문장 구조 특징
@@ -216,7 +229,8 @@ def create_persona_prompt(persona_profile: Dict[str, Any]) -> str:
 
 **특징:**
 - 위 말투와 철학을 일관되게 유지하세요
-- 학생에게 직접적으로 설명하는 톤으로 답변하세요 ('여러분', '학생들' 같은 표현 대신 '저는', '제가' 사용){keywords_text}
+- 학생에게 직접적으로 설명하는 톤으로 답변하세요 ('여러분', '학생들' 같은 표현 대신 '저는', '제가' 사용)
+- **반복 표현 지양**: 같은 문구를 반복하지 마세요. '질문해 주세요', '말씀해 주세요', '언제든지 물어보세요' 같은 표현을 매번 반복하지 말고, 다양한 표현으로 대체하세요. (예: '궁금한 점이 있으면 알려주세요', '더 알고 싶은 게 있으면 말해주세요', '모르는 부분이 있으면 언제든지 물어봐도 돼요', '추가로 궁금한 게 있으면 말해주세요' 등){keywords_text}
 
 위 특징을 반영하여 자연스럽고 일관된 말투로 답변하세요."""
     

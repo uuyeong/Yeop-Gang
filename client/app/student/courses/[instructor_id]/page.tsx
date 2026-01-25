@@ -200,10 +200,10 @@ export default function InstructorCoursesPage() {
                       {course.title || course.id}
                     </h3>
 
-                    {/* 카테고리 */}
+                    {/* 과목 */}
                     {course.category && (
                       <p className="mb-2 text-xs text-slate-500">
-                        카테고리: {course.category}
+                        과목: {course.category}
                       </p>
                     )}
 
