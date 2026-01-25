@@ -13,19 +13,25 @@
 !README.md
 
 # Python
-__pycache__
-*.pyc
-*.pyo
-*.pyd
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
 .Python
 .venv/
 venv/
+ENV/
+env/
 *.egg-info/
 dist/
 build/
 .pytest_cache/
 .coverage
 htmlcov/
+# Python 가상환경 및 캐시
+server/__pycache__/
+server/**/__pycache__/
+server/**/*.pyc
 
 # Node
 node_modules/
@@ -37,6 +43,9 @@ node_modules/
 out/
 .turbo/
 .swc/
+# Next.js 빌드 캐시 (Docker 빌드 시 재생성되므로 제외)
+client/.next/
+client/out/
 
 # 데이터베이스 및 데이터
 *.db
@@ -90,3 +99,11 @@ __tests__/
 .cache/
 tmp/
 temp/
+# 개발 파일
+*.swp
+*.swo
+*~
+.DS_Store
+# 참조 파일 (대용량 미디어)
+ref/
+ref/**/*

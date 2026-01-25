@@ -3,11 +3,11 @@ FROM node:20-alpine AS client-builder
 
 WORKDIR /app/client
 
-# Client 의존성 설치
+# Client 의존성 설치 (캐시 최적화: package.json이 변경되지 않으면 이 레이어 재사용)
 COPY client/package*.json ./
-RUN npm ci
+RUN npm ci --prefer-offline --no-audit
 
-# Client 빌드
+# Client 소스 코드 복사 및 빌드 (소스 코드만 변경되면 이 레이어부터 재빌드)
 COPY client/ .
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
@@ -22,22 +22,23 @@ FROM python:3.11-slim-bookworm AS server-builder
 WORKDIR /app/server
 
 # 시스템 의존성 설치 (ffmpeg for Whisper STT)
+# 캐시 최적화: 시스템 패키지는 거의 변경되지 않으므로 별도 레이어로 분리
 RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python 의존성 설치
-# requirements.txt 복사 (캐시 무효화를 위해 별도 레이어)
+# Python 빌드 도구 설치 (의존성과 분리하여 캐싱 최적화)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel build
+
+# Python 의존성 설치 (requirements.txt가 변경되지 않으면 이 레이어 재사용)
 COPY server/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel build && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # ==================== 최종 실행 스테이지 ====================
 FROM python:3.11-slim-bookworm
 
-# 시스템 의존성 설치
-# Node.js는 NodeSource에서 설치, ffmpeg는 Debian 저장소에서 설치
+# 시스템 의존성 설치 (캐시 최적화: 시스템 패키지는 거의 변경되지 않음)
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get update && \
@@ -77,15 +78,16 @@ RUN chmod +x /app/start.sh
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV NODE_ENV=production
+# PORT는 Render가 동적으로 할당하므로 기본값만 설정
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# 포트 노출
-EXPOSE 3000 8000
+# 포트 노출 (Render는 하나의 포트만 노출하므로 프론트엔드 포트만)
+EXPOSE 3000
 
-# 헬스체크 (백엔드와 프론트엔드 모두 확인)
+# 헬스체크 (프론트엔드만 확인, 백엔드는 내부에서만 접근 가능)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health && curl -f http://localhost:3000 || exit 1
+    CMD curl -f http://localhost:${PORT:-3000} || exit 1
 
 # 시작 스크립트 실행
 CMD ["/app/start.sh"]

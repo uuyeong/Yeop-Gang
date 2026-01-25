@@ -5,8 +5,18 @@
  * - 에러 처리
  */
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Render 환경에서는 같은 컨테이너 내에서 실행되므로 상대 경로 사용 (Next.js rewrites가 프록시)
+// 로컬 개발 환경에서는 절대 URL 사용
+const getApiBaseUrl = () => {
+  // 브라우저 환경에서는 상대 경로 사용 (Next.js rewrites가 프록시)
+  if (typeof window !== 'undefined') {
+    return process.env.NEXT_PUBLIC_API_URL || '';
+  }
+  // 서버 사이드에서는 절대 URL 사용
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+};
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export type ApiError = {
   message: string;
