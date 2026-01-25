@@ -1,0 +1,43 @@
+# Render 배포 설정 파일
+# https://render.com/docs/yaml-spec
+
+services:
+  # FastAPI 백엔드 서버
+  - type: web
+    name: yeopgang-backend
+    runtime: docker
+    plan: starter  # 또는 free, starter, standard 등
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:///./data/yeopgang.db
+      - key: DATA_ROOT
+        value: data
+      - key: OPENAI_API_KEY
+        sync: false  # Render 대시보드에서 직접 설정
+      - key: CHROMA_DB_PATH
+        value: data/chroma
+      - key: LLM_MODEL
+        value: gpt-4o-mini
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+    healthCheckPath: /api/health
+    disk:
+      name: yeopgang-data
+      mountPath: /app/data
+      sizeGB: 1  # 데이터베이스 및 파일 저장용
+
+  # Next.js 프론트엔드 클라이언트
+  - type: web
+    name: yeopgang-frontend
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./client/Dockerfile
+    dockerContext: ./client
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false  # Render 대시보드에서 백엔드 서비스 URL로 설정 필요
+        # 예: https://yeopgang-backend.onrender.com
+    # 참고: Render Blueprint에서는 fromService가 제한적으로 지원되므로
+    # 수동 배포 시 백엔드 서비스 URL을 직접 설정하는 것을 권장합니다

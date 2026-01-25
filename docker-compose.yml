@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  # FastAPI 백엔드 서버
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: yeopgang-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/yeopgang.db
+      - DATA_ROOT=data
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CHROMA_DB_PATH=data/chroma
+    volumes:
+      - ./server/data:/app/data
+      - ./ref:/app/ref
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Next.js 프론트엔드 클라이언트
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: yeopgang-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
