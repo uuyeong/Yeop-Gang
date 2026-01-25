@@ -84,13 +84,22 @@ export async function apiFetch<T>(
       ? (localStorage.getItem("token") || localStorage.getItem("instructor_token") || "")
       : "";
     
-    const headers: HeadersInit = {
+    // options?.headers를 Record<string, string>로 변환
+    const existingHeaders: Record<string, string> = options?.headers 
+      ? (options.headers instanceof Headers
+          ? Object.fromEntries(options.headers.entries())
+          : Array.isArray(options.headers)
+          ? Object.fromEntries(options.headers)
+          : options.headers as Record<string, string>)
+      : {};
+    
+    const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...options?.headers,
+      ...existingHeaders,
     };
     
     // Authorization 헤더가 없고 토큰이 있으면 추가
-    if (token && !headers["Authorization"] && !options?.headers?.["Authorization"]) {
+    if (token && !headers["Authorization"]) {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
