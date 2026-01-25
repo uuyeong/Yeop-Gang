@@ -42,7 +42,7 @@ pymupdf==1.24.0
 Pillow==10.4.0
 
 # 한국어 맞춤법 검사
-py-hanspell==4.0.5
+py-hanspell==1.1
 
 # 참고사항:
 # - langchain-openai 0.2.6 requires openai>=1.54.0,<2.0.0
