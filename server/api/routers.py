@@ -1136,9 +1136,53 @@ def ask(
 ) -> ChatResponse:
     # course_id URL 디코딩 (프론트엔드에서 인코딩되어 전달될 수 있음)
     from urllib.parse import unquote
+    from core.dh_guardrails import guardrails
+    from fastapi import HTTPException
+    
     course_id = unquote(payload.course_id) if payload.course_id else payload.course_id
     # payload.course_id를 디코딩된 값으로 업데이트
     payload.course_id = course_id
+    
+    # 질문 검증 (프롬프트 인젝션, 부적절한 질문 필터링)
+    is_valid, error_message = guardrails.validate_question(payload.question)
+    if not is_valid:
+        # 검증 실패 시 페르소나 적용된 거절 메시지 생성
+        history = _conversation_history.get(payload.conversation_id or "default", [])
+        rejection_message = _generate_persona_response(
+            user_message=f"학생이 부적절한 질문을 했습니다. ({error_message}) 강사로서 정중하게 거절하고, 강의 내용에 대한 질문만 가능하다고 안내해주세요.",
+            course_id=payload.course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=history
+        )
+        return ChatResponse(
+            answer=rejection_message,
+            sources=[],
+            conversation_id=payload.conversation_id or "default",
+            course_id=payload.course_id,
+        )
+    
+    # 질문 정제 (민감한 부분 제거)
+    sanitized_question = guardrails.sanitize_question(payload.question)
+    if not sanitized_question or len(sanitized_question.strip()) == 0:
+        # 질문 정제 실패 시 페르소나 적용된 거절 메시지 생성
+        history = _conversation_history.get(payload.conversation_id or "default", [])
+        rejection_message = _generate_persona_response(
+            user_message="학생이 질문을 했지만 질문을 이해할 수 없습니다. 강사로서 정중하게 상황을 설명하고, 강의 내용에 대한 질문을 다시 작성해달라고 안내해주세요.",
+            course_id=payload.course_id,
+            session=session,
+            pipeline=pipeline,
+            conversation_history=history
+        )
+        return ChatResponse(
+            answer=rejection_message,
+            sources=[],
+            conversation_id=payload.conversation_id or "default",
+            course_id=payload.course_id,
+        )
+    
+    # 정제된 질문으로 교체
+    payload.question = sanitized_question
     
     conversation_id = payload.conversation_id or "default"
     
