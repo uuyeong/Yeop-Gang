@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
 
 # Python 의존성 설치
 COPY server/requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel build && \
     pip install --no-cache-dir -r requirements.txt
 
 # ==================== 최종 실행 스테이지 ====================
