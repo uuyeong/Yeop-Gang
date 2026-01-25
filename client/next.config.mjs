@@ -2,7 +2,7 @@
 const nextConfig = {
   output: "standalone",
   experimental: {
-    typedRoutes: true,
+    // typedRoutes: true, // 동적 경로 사용 시 타입 오류 발생 가능
   },
   eslint: {
     ignoreDuringBuilds: true,
