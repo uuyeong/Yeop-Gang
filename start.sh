@@ -35,18 +35,13 @@ fi
 
 # 프론트엔드 서버 시작 (Render가 할당한 포트 사용)
 cd /app/client
-# Next.js standalone 모드는 PORT와 HOSTNAME 환경 변수를 자동으로 인식
-export PORT=$FRONTEND_PORT
-export HOSTNAME="0.0.0.0"
-node server.js &
+PORT=$FRONTEND_PORT HOSTNAME="0.0.0.0" node server.js &
 FRONTEND_PID=$!
 echo "✅ 프론트엔드 서버 시작 (PID: $FRONTEND_PID) - 포트: $FRONTEND_PORT"
-echo "   Render PORT 환경 변수: ${PORT:-(없음)}"
 
 echo "✅ 모든 서비스가 시작되었습니다"
-echo "   - 프론트엔드: http://0.0.0.0:$FRONTEND_PORT (외부 접근 가능)"
+echo "   - 프론트엔드: http://0.0.0.0:$FRONTEND_PORT"
 echo "   - 백엔드 API: http://localhost:$BACKEND_PORT (내부 전용)"
-echo "   - Render PORT 환경 변수: ${PORT:-(없음)}"
 
 # 프로세스 종료 시그널 처리
 trap "echo '종료 시그널 수신...'; kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" SIGTERM SIGINT

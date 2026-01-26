@@ -316,7 +316,7 @@ export default function EditProfileModal({
                 <option value="수학">수학</option>
                 <option value="영어">영어</option>
                 <option value="사회">사회</option>
-                <option value="역사">역사</option>
+                <option value="한국사">한국사</option>
                 <option value="물리">물리</option>
                 <option value="화학">화학</option>
                 <option value="생명과학">생명과학</option>
