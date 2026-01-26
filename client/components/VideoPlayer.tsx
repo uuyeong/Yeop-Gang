@@ -117,8 +117,11 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ src, courseId, onTimeUp
           : "";
         
         const endpoint = `/api/courses/${courseId}/transcript`;
-        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const fullUrl = `${apiBaseUrl}${endpoint}`;
+        // Render 환경에서는 API Routes 프록시 사용 (상대 경로)
+        const apiBaseUrl = typeof window !== 'undefined' 
+          ? (process.env.NEXT_PUBLIC_API_URL || '')
+          : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000");
+        const fullUrl = apiBaseUrl ? `${apiBaseUrl}${endpoint}` : endpoint;
         
         console.log(`[자막] 요청 URL: ${fullUrl}`);
         console.log(`[자막] 토큰 있음: ${!!token}`);
@@ -311,7 +314,9 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ src, courseId, onTimeUp
           ref={videoRef}
           className="h-full w-full bg-black"
           controls
-          src={src ?? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/video/default`}
+          src={src ?? (typeof window !== 'undefined' 
+            ? `/api/video/default`
+            : `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/video/default`)}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onError={handleError}
