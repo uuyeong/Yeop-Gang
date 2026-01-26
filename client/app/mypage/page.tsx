@@ -282,11 +282,11 @@ export default function MyPage() {
             {/* 프로필 정보 */}
             <div className="flex flex-col sm:flex-row items-start gap-4 sm:gap-6">
               {/* 프로필 사진 */}
-              <div className="relative flex-shrink-0 w-full sm:w-auto flex justify-center sm:justify-start">
+              <div className="relative flex-shrink-0 w-full sm:w-auto flex flex-col items-center sm:items-start">
                 <div
-                  className={`relative flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-full overflow-hidden border-2 ${
+                  className={`relative flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-full overflow-hidden border ${
                     isEditing && user.role === "instructor"
-                      ? "border-primary cursor-pointer hover:opacity-80 transition-opacity"
+                      ? "border-gray-300 cursor-pointer hover:opacity-80 transition-opacity"
                       : "border-gray-300"
                   }`}
                   onClick={handleImageClick}
@@ -316,12 +316,13 @@ export default function MyPage() {
                     </div>
                   )}
                 </div>
+                {/* 프로필 이미지 변경/삭제 버튼 (프로필 이미지 바로 아래) */}
                 {isEditing && user.role === "instructor" && (
-                  <div className="mt-2 flex gap-2 justify-center">
+                  <div className="mt-1.5 flex gap-1.5 justify-center">
                     <button
                       type="button"
                       onClick={handleImageClick}
-                      className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-secondary transition-all"
+                      className="px-2.5 py-1 text-xs bg-blue-500 text-white border border-blue-500 rounded hover:bg-blue-600 hover:border-blue-600 transition-all duration-150"
                     >
                       변경
                     </button>
@@ -329,7 +330,7 @@ export default function MyPage() {
                       <button
                         type="button"
                         onClick={handleImageRemove}
-                        className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-all"
+                        className="px-2.5 py-1 text-xs bg-red-500 text-white border border-red-500 rounded hover:bg-red-600 hover:border-red-600 transition-all duration-150"
                       >
                         삭제
                       </button>
