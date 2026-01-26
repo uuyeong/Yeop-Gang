@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, UserPlus, Upload, MessageSquare, FileText, HelpCircle, GraduationCap, Video, Brain, CheckCircle } from "lucide-react";
+import { BookOpen, UserPlus, Upload, MessageSquare, FileText, GraduationCap, Video, Brain, CheckCircle } from "lucide-react";
 import Link from "next/link";
 
 export default function GuidePage() {
@@ -9,9 +9,6 @@ export default function GuidePage() {
       <div className="container mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-16">
         {/* 헤더 */}
         <div className="text-center mb-8 sm:mb-12 md:mb-16">
-          <div className="inline-flex items-center justify-center w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-blue-100 text-blue-600 mb-4 sm:mb-6">
-            <HelpCircle className="h-6 w-6 sm:h-8 sm:w-8" />
-          </div>
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-slate-900 mb-2 sm:mb-4" style={{ fontFamily: 'var(--font-display)' }}>
             이용안내
           </h1>
