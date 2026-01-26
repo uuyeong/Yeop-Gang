@@ -177,41 +177,39 @@ export default function YeopgangHeader() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-0">
             {/* 모바일: 첫 번째 줄 (로고 + 버튼), 데스크톱: Search Bar (왼쪽) */}
             <div className="w-full sm:w-48 md:w-64 flex-shrink-0 order-1 sm:order-1">
-              {/* 모바일: 첫 번째 줄 - 로고(중앙) + 버튼(오른쪽) */}
-              <div className="flex sm:hidden items-center justify-between relative">
-                {/* 모바일: Logo - 중앙 */}
-                <div className="absolute left-1/2 -translate-x-1/2">
-                  <Link href="/">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src="/image/YeopGang_Logo.png"
-                      alt="옆강"
-                      className="h-8 w-auto"
-                    />
-                  </Link>
-                </div>
-                {/* 모바일: Action Buttons - 오른쪽 */}
-                <div className="flex items-center gap-2 ml-auto">
-                  {mounted && authenticated && (
-                    <>
-                      {user?.role === "instructor" && (
-                        <Link
-                          href="/instructor/courses"
-                          className="border border-gray-400 rounded-lg px-2 py-1.5 hover:bg-primary hover:text-white hover:border-transparent transition-all duration-150 text-xs whitespace-nowrap"
-                        >
-                          관리
-                        </Link>
-                      )}
-                      <button
-                        className="border border-gray-400 rounded-lg p-1.5 hover:bg-primary hover:text-white hover:border-transparent transition-all duration-150"
-                        onClick={() => router.push("/mypage")}
+              {/* 모바일: 첫 번째 줄 - 로고(중앙) + 버튼(오른쪽) - 로그인 상태일 때만 표시 */}
+              {mounted && authenticated && (
+                <div className="flex sm:hidden items-center justify-between relative">
+                  {/* 모바일: Logo - 중앙 */}
+                  <div className="absolute left-1/2 -translate-x-1/2">
+                    <Link href="/">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src="/image/YeopGang_Logo.png"
+                        alt="옆강"
+                        className="h-8 w-auto"
+                      />
+                    </Link>
+                  </div>
+                  {/* 모바일: Action Buttons - 오른쪽 */}
+                  <div className="flex items-center gap-2 ml-auto">
+                    {user?.role === "instructor" && (
+                      <Link
+                        href="/instructor/courses"
+                        className="border border-gray-400 rounded-lg px-2 py-1.5 hover:bg-primary hover:text-white hover:border-transparent transition-all duration-150 text-xs whitespace-nowrap"
                       >
-                        <User size={18} />
-                      </button>
-                    </>
-                  )}
+                        관리
+                      </Link>
+                    )}
+                    <button
+                      className="border border-gray-400 rounded-lg p-1.5 hover:bg-primary hover:text-white hover:border-transparent transition-all duration-150"
+                      onClick={() => router.push("/mypage")}
+                    >
+                      <User size={18} />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* 데스크톱: Search Bar */}
               <form
@@ -243,7 +241,20 @@ export default function YeopgangHeader() {
             </div>
 
             {/* 모바일: Search Bar (아래), 데스크톱: Logo (중앙) */}
-            <div className="w-full sm:flex-1 flex justify-center order-2 sm:order-2">
+            <div className="w-full sm:flex-1 flex flex-col sm:flex-row justify-center items-center gap-3 sm:gap-0 order-2 sm:order-2">
+              {/* 모바일: 로고 (로그아웃 상태일 때만 검색바 위에 표시) */}
+              {mounted && !authenticated && (
+                <div className="block sm:hidden">
+                  <Link href="/">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/image/YeopGang_Logo.png"
+                      alt="옆강"
+                      className="h-8 w-auto"
+                    />
+                  </Link>
+                </div>
+              )}
               {/* 모바일: Search Bar */}
               <form
                 className="block sm:hidden w-full"
