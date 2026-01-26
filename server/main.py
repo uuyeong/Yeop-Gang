@@ -27,8 +27,11 @@ if not logging.root.handlers:
         )
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from ai.routers import router as ai_router
 from api.routers import router as api_router
@@ -52,6 +55,23 @@ def create_app() -> FastAPI:
         pass
 
     app = FastAPI(title="Yeop-Gang API", version="0.1.0")
+
+    # 검증 에러 핸들러 추가 (상세한 에러 로깅)
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """요청 검증 에러 핸들러 - 상세한 에러 정보 로깅"""
+        logger = logging.getLogger(__name__)
+        logger.error(f"❌ 요청 검증 실패 - URL: {request.url}, Method: {request.method}")
+        logger.error(f"❌ 에러 상세: {exc.errors()}")
+        logger.error(f"❌ 요청 본문: {await request.body() if hasattr(request, 'body') else 'N/A'}")
+        
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "detail": exc.errors(),
+                "body": str(exc.body) if hasattr(exc, 'body') else None,
+            },
+        )
 
     app.add_middleware(
         CORSMiddleware,

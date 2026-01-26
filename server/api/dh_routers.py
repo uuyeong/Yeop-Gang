@@ -273,44 +273,73 @@ async def instructor_create_course(
     """강의 목록 생성 (파일 없이, 부모 강의만 생성)"""
     from datetime import datetime
     
-    # 기존 강의 확인
-    existing_course = session.get(Course, payload.course_id)
-    if existing_course:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"강의 목록 ID '{payload.course_id}'가 이미 존재합니다.",
+    try:
+        logger.info(f"📝 강의 생성 요청 - course_id: {payload.course_id}, title: {payload.title}, category: {payload.category}, total_chapters: {payload.total_chapters}")
+        logger.info(f"📝 current_user: {current_user}")
+        
+        # 필수 필드 검증
+        if not payload.course_id or not payload.course_id.strip():
+            logger.error(f"❌ course_id가 비어있음")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="강의 ID는 필수 항목입니다.",
+            )
+        
+        # 기존 강의 확인
+        existing_course = session.get(Course, payload.course_id)
+        if existing_course:
+            logger.warning(f"⚠️ 강의 ID 중복 - course_id: {payload.course_id}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"강의 목록 ID '{payload.course_id}'가 이미 존재합니다.",
+            )
+        
+        # 강사 정보 확인/생성
+        instructor = session.get(Instructor, current_user["id"])
+        if not instructor:
+            logger.info(f"➕ 새 강사 생성 - instructor_id: {current_user['id']}")
+            instructor = Instructor(id=current_user["id"])
+            session.add(instructor)
+            session.commit()
+        
+        # 강의 목록 생성 (파일 없이, 상태는 completed로 설정 - 챕터를 추가할 수 있도록)
+        # parent_course_id는 null (부모 강의이므로)
+        title = payload.title.strip() if payload.title and payload.title.strip() else None
+        category = payload.category.strip() if payload.category and payload.category.strip() else None
+        
+        logger.info(f"💾 강의 생성 중 - course_id: {payload.course_id}, title: {title}, category: {category}, total_chapters: {payload.total_chapters}")
+        
+        course = Course(
+            id=payload.course_id,
+            instructor_id=current_user["id"],
+            title=title,
+            category=category,
+            total_chapters=payload.total_chapters,  # 전체 강의 수 (참고용)
+            parent_course_id=None,  # 부모 강의는 parent_course_id가 null
+            status=CourseStatus.completed,  # 챕터를 추가할 수 있도록 completed 상태
+            progress=0,
         )
-    
-    # 강사 정보 확인/생성
-    instructor = session.get(Instructor, current_user["id"])
-    if not instructor:
-        instructor = Instructor(id=current_user["id"])
-        session.add(instructor)
+        session.add(course)
         session.commit()
-    
-    # 강의 목록 생성 (파일 없이, 상태는 completed로 설정 - 챕터를 추가할 수 있도록)
-    # parent_course_id는 null (부모 강의이므로)
-    course = Course(
-        id=payload.course_id,
-        instructor_id=current_user["id"],
-        title=payload.title.strip() if payload.title and payload.title.strip() else None,
-        category=payload.category.strip() if payload.category and payload.category.strip() else None,
-        total_chapters=payload.total_chapters,  # 전체 강의 수 (참고용)
-        parent_course_id=None,  # 부모 강의는 parent_course_id가 null
-        status=CourseStatus.completed,  # 챕터를 추가할 수 있도록 completed 상태
-        progress=0,
-    )
-    session.add(course)
-    session.commit()
-    session.refresh(course)
-    
-    return {
-        "message": "강의 목록이 생성되었습니다.",
-        "course_id": course.id,
-        "title": course.title,
-        "category": course.category,
-        "total_chapters": course.total_chapters,
-    }
+        session.refresh(course)
+        
+        logger.info(f"✅ 강의 생성 완료 - course_id: {course.id}")
+        
+        return {
+            "message": "강의 목록이 생성되었습니다.",
+            "course_id": course.id,
+            "title": course.title,
+            "category": course.category,
+            "total_chapters": course.total_chapters,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 강의 생성 중 오류 발생: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"강의 생성 중 오류가 발생했습니다: {str(e)}"
+        )
 
 
 @router.post("/instructor/upload", response_model=UploadResponse)
