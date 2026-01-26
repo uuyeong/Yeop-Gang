@@ -450,38 +450,38 @@ def process_course_assets(
                                 if update_progress and total_pages > 0:
                                     pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
                                     update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
+                                
+                                # 배치 처리
+                                is_last = page_idx == total_pages - 1
+                                if batch_texts and (len(batch_texts) >= batch_size or is_last):
+                                    try:
+                                        result = pipeline.ingest_texts_with_metadatas(
+                                            batch_texts,
+                                            course_id=course_id,
+                                            metadatas=batch_metas,
+                                        )
+                                        ingested_count += result.get("ingested", 0)
+                                    except Exception as batch_error:
+                                        print(f"[{course_id}] ⚠️ PDF 배치 인제스트 오류: {batch_error}")
+                                        # 배치 실패 시 페이지 단위로 재시도
+                                        for retry_text, retry_meta in zip(batch_texts, batch_metas):
+                                            try:
+                                                result = pipeline.ingest_texts(
+                                                    [retry_text],
+                                                    course_id=course_id,
+                                                    metadata=retry_meta,
+                                                )
+                                                ingested_count += result.get("ingested", 0)
+                                            except Exception as retry_error:
+                                                print(f"[{course_id}] ⚠️ PDF 페이지 인제스트 재시도 오류: {retry_error}")
+                                                continue
+                                    finally:
+                                        batch_texts = []
+                                        batch_metas = []
                             except Exception as page_error:
                                 print(f"[{course_id}] ⚠️ PDF 페이지 {page_idx + 1} 인제스트 오류: {page_error}")
                                 # 개별 페이지 오류는 건너뛰고 계속 진행
                                 continue
-
-                            # 배치 처리
-                            is_last = page_idx == total_pages - 1
-                            if batch_texts and (len(batch_texts) >= batch_size or is_last):
-                                try:
-                                    result = pipeline.ingest_texts_with_metadatas(
-                                        batch_texts,
-                                        course_id=course_id,
-                                        metadatas=batch_metas,
-                                    )
-                                    ingested_count += result.get("ingested", 0)
-                                except Exception as batch_error:
-                                    print(f"[{course_id}] ⚠️ PDF 배치 인제스트 오류: {batch_error}")
-                                    # 배치 실패 시 페이지 단위로 재시도
-                                    for retry_text, retry_meta in zip(batch_texts, batch_metas):
-                                        try:
-                                            result = pipeline.ingest_texts(
-                                                [retry_text],
-                                                course_id=course_id,
-                                                metadata=retry_meta,
-                                            )
-                                            ingested_count += result.get("ingested", 0)
-                                        except Exception as page_error:
-                                            print(f"[{course_id}] ⚠️ PDF 페이지 인제스트 재시도 오류: {page_error}")
-                                            continue
-                                finally:
-                                    batch_texts = []
-                                    batch_metas = []
                         
                         print(f"[{course_id}] ✅ PDF 페이지 인제스트 완료 ({len(pdf_texts)}개 페이지)")
                     else:

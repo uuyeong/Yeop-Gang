@@ -115,6 +115,8 @@ htmlcov/
 
 # Server data directory (explicit)
 server/data/
+# Crawling data (large files)
+server/data/crawling/
 
 # Additional OS files
 .AppleDouble
