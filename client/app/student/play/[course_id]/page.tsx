@@ -125,7 +125,7 @@ export default function StudentPlayPage({ params }: Props) {
             <div className="lg:col-span-2">
               <VideoPlayer
                 ref={videoPlayerRef}
-                src={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/video/${course_id}`}
+                src={`/api/video/${course_id}`}
                 courseId={course_id}
                 onTimeUpdate={handleVideoTimeUpdate}
               />

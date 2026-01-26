@@ -13,8 +13,25 @@ uvicorn main:app --host 0.0.0.0 --port $BACKEND_PORT &
 BACKEND_PID=$!
 echo "✅ 백엔드 서버 시작 (PID: $BACKEND_PID) - 포트: $BACKEND_PORT"
 
-# 잠시 대기 (백엔드가 시작될 시간)
-sleep 3
+# 백엔드가 준비될 때까지 대기 (최대 30초)
+echo "⏳ 백엔드 서버 준비 대기 중..."
+MAX_WAIT=30
+WAIT_COUNT=0
+while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+  if curl -f -s http://localhost:$BACKEND_PORT/api/health > /dev/null 2>&1; then
+    echo "✅ 백엔드 서버 준비 완료"
+    break
+  fi
+  WAIT_COUNT=$((WAIT_COUNT + 1))
+  sleep 1
+  if [ $((WAIT_COUNT % 5)) -eq 0 ]; then
+    echo "   대기 중... ($WAIT_COUNT/$MAX_WAIT)"
+  fi
+done
+
+if [ $WAIT_COUNT -eq $MAX_WAIT ]; then
+  echo "⚠️  백엔드 서버가 $MAX_WAIT초 내에 준비되지 않았습니다. 계속 진행합니다..."
+fi
 
 # 프론트엔드 서버 시작 (Render가 할당한 포트 사용)
 cd /app/client
