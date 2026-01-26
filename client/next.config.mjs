@@ -7,20 +7,8 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // Render 환경에서 백엔드 API 프록시 (같은 컨테이너 내에서 실행)
-  // 클라이언트 사이드 요청을 백엔드로 프록시
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://localhost:8000/api/:path*",
-      },
-      {
-        source: "/ai/:path*",
-        destination: "http://localhost:8000/ai/:path*",
-      },
-    ];
-  },
+  // 외부 배포 시 rewrites는 필요 없음 (NEXT_PUBLIC_API_URL로 직접 연결)
+  // 로컬 개발 시에만 rewrites 사용 (선택사항)
 };
 
 export default nextConfig;

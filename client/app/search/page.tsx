@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Search, BookOpen, User } from "lucide-react";
@@ -15,7 +15,7 @@ type Course = {
   status: string;
 };
 
-export default function SearchPage() {
+function SearchPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const query = searchParams.get("q") || "";
@@ -201,6 +201,22 @@ export default function SearchPage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={
+      <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-10">
+          <div className="flex items-center justify-center py-8 sm:py-12">
+            <div className="text-slate-400 text-sm sm:text-base">로딩 중...</div>
+          </div>
+        </div>
+      </main>
+    }>
+      <SearchPageContent />
+    </Suspense>
   );
 }
 
