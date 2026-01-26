@@ -2,6 +2,8 @@
 
 이 문서는 Docker와 Render를 사용한 배포 방법을 설명합니다.
 
+> **도메인 주소**: `https://yeop-gang.onrender.com`
+
 ## 📋 목차
 
 1. [무료 배포 (render.yaml 없이)](#-무료-배포-renderyaml-없이)
@@ -38,12 +40,14 @@
 1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
 2. GitHub 저장소 연결 후 이 프로젝트 선택
 3. 아래처럼 설정:
-   - **Name**: `yeopgang-app` (원하는 이름)
+   - **Name**: `yeop-gang` (또는 원하는 이름, 이 이름이 URL에 사용됨)
    - **Region**: Singapore (가까운 지역)
    - **Runtime**: **Docker**
    - **Dockerfile Path**: `Dockerfile` (root의 Dockerfile)
    - **Docker Context**: `.` (프로젝트 루트)
    - **Plan**: **Free**
+   
+   > **참고**: 서비스 이름이 URL에 사용됩니다. 예: `yeop-gang` → `https://yeop-gang.onrender.com`
 4. **Environment** 탭에서 **Add Environment Variable** (아래 표 참고)
 5. **Create Web Service** 클릭
 
@@ -65,11 +69,12 @@
 > 
 > **옵션 1: 같은 컨테이너 내 백엔드 사용 (기본값)**
 > - `NEXT_PUBLIC_API_URL`을 **설정하지 않음**
-> - 프론트엔드가 `http://localhost:8000`으로 같은 컨테이너 내 백엔드에 접근
-> - Next.js API Routes 프록시가 자동으로 백엔드로 요청을 전달
+> - 브라우저에서 `/api/...` 경로로 요청 → Next.js API Routes 프록시가 자동으로 `http://localhost:8000`으로 전달
+> - 예: `https://yeop-gang.onrender.com/api/courses` → 내부 백엔드 `http://localhost:8000/api/courses`
+> - **이 방식이 통합 배포의 기본 동작입니다**
 > 
 > **옵션 2: 외부 백엔드 URL 사용**
-> - `NEXT_PUBLIC_API_URL`을 **외부 백엔드 URL로 설정** (예: `https://yeopgang-backend.onrender.com`)
+> - `NEXT_PUBLIC_API_URL`을 **외부 백엔드 URL로 설정** (예: `https://yeop-gang-backend.onrender.com`)
 > - 프론트엔드가 외부 백엔드 서비스로 직접 접근
 > - 백엔드를 별도 서비스로 먼저 배포해야 함
 
@@ -96,7 +101,7 @@ OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
 DATABASE_URL=sqlite:///./server/data/yeopgang.db
 DATA_ROOT=server/data
 CHROMA_DB_PATH=server/data/chroma
-NEXT_PUBLIC_API_URL=https://yeopgang-backend.onrender.com
+NEXT_PUBLIC_API_URL=https://yeop-gang-backend.onrender.com
 ```
 
 > **참고**: 외부 백엔드 URL을 사용하는 경우, 통합 배포의 백엔드는 실행되지 않습니다. 프론트엔드만 실행되며 외부 백엔드로 요청을 보냅니다.
@@ -118,7 +123,7 @@ NEXT_PUBLIC_API_URL=https://yeopgang-backend.onrender.com
 1. **백엔드를 별도 서비스로 먼저 배포** (분리 배포의 "1. 백엔드 배포" 참고)
 2. **통합 배포 시 Render 환경 변수에 `NEXT_PUBLIC_API_URL` 설정**
    - Render 대시보드 → 서비스 설정 → Environment
-   - `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com` (백엔드 URL)
+   - `NEXT_PUBLIC_API_URL` = `https://yeop-gang-backend.onrender.com` (백엔드 URL)
 3. **Dockerfile 빌드 시 환경 변수 전달**
    - Render는 자동으로 환경 변수를 빌드 컨텍스트에 전달
    - Dockerfile의 `ARG NEXT_PUBLIC_API_URL`이 환경 변수 값을 받음
@@ -136,12 +141,14 @@ NEXT_PUBLIC_API_URL=https://yeopgang-backend.onrender.com
 1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
 2. GitHub 저장소 연결 후 이 프로젝트 선택
 3. 아래처럼 설정:
-   - **Name**: `yeopgang-backend` (원하는 이름)
+   - **Name**: `yeop-gang-backend` (또는 원하는 이름, 이 이름이 URL에 사용됨)
    - **Region**: Singapore (가까운 지역)
    - **Runtime**: **Docker**
    - **Dockerfile Path**: `server/Dockerfile`
    - **Docker Context**: `server`
    - **Plan**: **Free**
+   
+   > **참고**: 서비스 이름이 URL에 사용됩니다. 예: `yeop-gang-backend` → `https://yeop-gang-backend.onrender.com`
 4. **Environment** 탭에서 **Add Environment Variable**:
    - `OPENAI_API_KEY` = (본인 OpenAI 키)
    - `DATABASE_URL` = `sqlite:///./data/yeopgang.db`
@@ -149,24 +156,27 @@ NEXT_PUBLIC_API_URL=https://yeopgang-backend.onrender.com
    - `CHROMA_DB_PATH` = `data/chroma`
 5. **Create Web Service** 클릭
 
-배포가 끝나면 **URL**이 나옵니다. 예: `https://yeopgang-backend.onrender.com` → **이 URL을 복사해 두세요!**
+배포가 끝나면 **URL**이 나옵니다. 예: `https://yeop-gang-backend.onrender.com` → **이 URL을 복사해 두세요!**
 
 #### 2. 프론트엔드 배포
 
 1. **New +** → **Web Service** → 같은 저장소 선택
 2. 설정:
-   - **Name**: `yeopgang-frontend`
+   - **Name**: `yeop-gang` (또는 원하는 이름, 이 이름이 URL에 사용됨)
    - **Region**: Singapore (가까운 지역)
    - **Runtime**: **Docker**
    - **Dockerfile Path**: `client/Dockerfile`
    - **Docker Context**: `client`
    - **Plan**: **Free**
+   
+   > **참고**: 서비스 이름이 URL에 사용됩니다. 예: `yeop-gang` → `https://yeop-gang.onrender.com`
+   
 3. **Environment**:
-   - `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com`  
+   - `NEXT_PUBLIC_API_URL` = `https://yeop-gang-backend.onrender.com`  
      ⚠️ **위에서 복사한 백엔드 URL로 반드시 변경하세요!**
 4. **Create Web Service** 클릭
 
-> **중요**: 프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 실제 외부 URL이어야 합니다. 예: `https://yeopgang-backend.onrender.com`
+> **중요**: 프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 실제 외부 URL이어야 합니다. 예: `https://yeop-gang-backend.onrender.com`
 
 #### 분리 배포 환경 변수 요약
 
@@ -177,7 +187,11 @@ NEXT_PUBLIC_API_URL=https://yeopgang-backend.onrender.com
 - `CHROMA_DB_PATH` = `data/chroma`
 
 **프론트엔드 서비스:**
-- `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com` (백엔드 URL)
+- `NEXT_PUBLIC_API_URL` = `https://yeop-gang-backend.onrender.com` (백엔드 URL)
+
+> **도메인 주소**: 
+> - 프론트엔드: `https://yeop-gang.onrender.com`
+> - 백엔드: `https://yeop-gang-backend.onrender.com` (분리 배포 시)
 
 ---
 
@@ -307,7 +321,11 @@ Render 대시보드의 각 서비스에서 다음 환경 변수를 설정하세�
 
 1. **서비스 URL**
 
-   프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 **실제 URL**로 설정해야 합니다. 예: `https://yeopgang-backend.onrender.com`
+   프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 **실제 URL**로 설정해야 합니다. 예: `https://yeop-gang-backend.onrender.com`
+   
+   **도메인 주소 예시**:
+   - 프론트엔드: `https://yeop-gang.onrender.com`
+   - 백엔드: `https://yeop-gang-backend.onrender.com` (분리 배포 시)
 
 2. **무료 플랜 제한사항**
 
