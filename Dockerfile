@@ -82,15 +82,12 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# 포트 노출
-# Render는 PORT 환경 변수를 제공하므로 동적으로 할당됨
-# EXPOSE는 문서화 목적이며, 실제 포트는 Render가 결정
+# 포트 노출 (Render는 하나의 포트만 노출하므로 프론트엔드 포트만)
 EXPOSE 3000
 
 # 헬스체크 (프론트엔드만 확인, 백엔드는 내부에서만 접근 가능)
-# Render의 PORT 환경 변수를 사용 (없으면 기본값 3000)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD sh -c 'curl -f http://localhost:${PORT:-3000} || exit 1'
+    CMD curl -f http://localhost:${PORT:-3000} || exit 1
 
 # 시작 스크립트 실행
 CMD ["/app/start.sh"]

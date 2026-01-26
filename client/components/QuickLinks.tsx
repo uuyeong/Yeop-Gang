@@ -10,14 +10,7 @@
 import { Gift, Calendar, BookOpen, TrendingUp, Tablet, Video } from "lucide-react";
 import Link from "next/link";
 
-const quickLinks = [
-  { icon: Gift, label: "이벤트", color: "bg-accent", link: "/" },
-  { icon: Calendar, label: "교재상품권", color: "bg-primary", link: "/" },
-  { icon: BookOpen, label: "커리큘럼", color: "bg-secondary", link: "/student/courses" },
-  { icon: TrendingUp, label: "2026 정시 점수공개", color: "bg-sky-400", link: "/" },
-  { icon: Tablet, label: "SMART Tab", color: "bg-blue-400", link: "/" },
-  { icon: Video, label: "강좌&교재 찾기", color: "bg-blue-500", link: "/student/courses" },
-];
+const quickLinks: Array<{ icon: any; label: string; color: string; link: string }> = [];
 
 export default function QuickLinks() {
   return (

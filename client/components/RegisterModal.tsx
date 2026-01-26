@@ -167,27 +167,27 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+      <div className="relative w-full max-w-[80%] sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-4 sm:p-6 shadow-xl">
         {/* 닫기 버튼 */}
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 text-slate-400 hover:text-slate-600"
+          className="absolute right-3 sm:right-4 top-3 sm:top-4 text-slate-400 hover:text-slate-600 z-10"
         >
-          <X className="h-5 w-5" />
+          <X className="h-4 w-4 sm:h-5 sm:w-5" />
         </button>
 
         {/* 제목 */}
-        <h2 className="mb-6 text-2xl font-bold text-slate-900">강사 회원가입</h2>
+        <h2 className="mb-4 sm:mb-6 text-xl sm:text-2xl font-bold text-slate-900">강사 회원가입</h2>
 
         {/* 폼 */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
           {/* 프로필 이미지 업로드 */}
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">
+            <label className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               프로필 이미지
             </label>
-            <div className="flex flex-col items-center gap-4">
+            <div className="flex flex-col items-center gap-3 sm:gap-4">
               {/* 프로필 이미지 미리보기 */}
               <div
                 onClick={handleImageClick}
@@ -199,7 +199,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
                     <img
                       src={profileImagePreview}
                       alt="프로필 미리보기"
-                      className="h-24 w-24 rounded-full object-cover border-2 border-slate-300 group-hover:border-blue-500 transition-colors"
+                      className="h-20 w-20 sm:h-24 sm:w-24 rounded-full object-cover border-2 border-slate-300 group-hover:border-blue-500 transition-colors"
                     />
                     <button
                       type="button"
@@ -207,14 +207,14 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
                         e.stopPropagation();
                         handleImageRemove();
                       }}
-                      className="absolute -top-1 -right-1 h-6 w-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors shadow-lg"
+                      className="absolute -top-1 -right-1 h-5 w-5 sm:h-6 sm:w-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors shadow-lg"
                     >
-                      <XCircle className="h-4 w-4" />
+                      <XCircle className="h-3 w-3 sm:h-4 sm:w-4" />
                     </button>
                   </div>
                 ) : (
-                  <div className="h-24 w-24 rounded-full bg-slate-100 border-2 border-dashed border-slate-300 flex flex-col items-center justify-center group-hover:border-blue-500 group-hover:bg-blue-50 transition-colors">
-                    <User className="h-8 w-8 text-slate-400 group-hover:text-blue-500" />
+                  <div className="h-20 w-20 sm:h-24 sm:w-24 rounded-full bg-slate-100 border-2 border-dashed border-slate-300 flex flex-col items-center justify-center group-hover:border-blue-500 group-hover:bg-blue-50 transition-colors">
+                    <User className="h-6 w-6 sm:h-8 sm:w-8 text-slate-400 group-hover:text-blue-500" />
                   </div>
                 )}
                 <input
@@ -230,18 +230,18 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               <button
                 type="button"
                 onClick={handleImageClick}
-                className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
               >
-                <Upload className="h-4 w-4" />
+                <Upload className="h-3 w-3 sm:h-4 sm:w-4" />
                 <span>{profileImage ? "이미지 변경" : "이미지 선택"}</span>
               </button>
               
               {profileImage && (
-                <p className="text-xs text-slate-500">
-                  선택된 파일: {profileImage.name} ({(profileImage.size / 1024).toFixed(1)}KB)
+                <p className="text-xs text-slate-500 text-center px-2">
+                  선택된 파일: {profileImage.name.length > 20 ? profileImage.name.substring(0, 20) + '...' : profileImage.name} ({(profileImage.size / 1024).toFixed(1)}KB)
                 </p>
               )}
-              <p className="text-xs text-slate-400 text-center">
+              <p className="text-xs text-slate-400 text-center px-2">
                 권장 크기: 200x200px 이상<br />
                 지원 형식: JPG, PNG, GIF (최대 5MB)
               </p>
@@ -250,7 +250,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
 
           {/* 강사 ID */}
           <div>
-            <label htmlFor="id" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="id" className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               강사 ID <span className="text-red-500">*</span>
             </label>
             <input
@@ -260,14 +260,14 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               value={formData.id}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-slate-300 px-3 sm:px-4 py-2 text-xs sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="강사 ID를 입력하세요"
             />
           </div>
 
           {/* 이름 */}
           <div>
-            <label htmlFor="name" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="name" className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               이름 <span className="text-red-500">*</span>
             </label>
             <input
@@ -277,14 +277,14 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               value={formData.name}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-slate-300 px-3 sm:px-4 py-2 text-xs sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="이름을 입력하세요"
             />
           </div>
 
           {/* 이메일 */}
           <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="email" className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               이메일 <span className="text-red-500">*</span>
             </label>
             <input
@@ -294,14 +294,14 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               value={formData.email}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-slate-300 px-3 sm:px-4 py-2 text-xs sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="이메일을 입력하세요"
             />
           </div>
 
           {/* 비밀번호 */}
           <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="password" className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               비밀번호 <span className="text-red-500">*</span>
             </label>
             <input
@@ -312,7 +312,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               onChange={handleChange}
               required
               minLength={8}
-              className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-slate-300 px-3 sm:px-4 py-2 text-xs sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="비밀번호 (최소 8자)"
             />
             <p className="mt-1 text-xs text-slate-500">비밀번호는 최소 8자 이상이어야 합니다.</p>
@@ -320,7 +320,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
 
           {/* 전문 분야 */}
           <div>
-            <label htmlFor="specialization" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="specialization" className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               전문 분야 <span className="text-red-500">*</span>
             </label>
             <select
@@ -329,14 +329,14 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               value={formData.specialization}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-slate-300 px-3 sm:px-4 py-2 text-xs sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">선택하세요</option>
               <option value="국어">국어</option>
               <option value="수학">수학</option>
               <option value="영어">영어</option>
               <option value="사회">사회</option>
-              <option value="역사">역사</option>
+              <option value="한국사">한국사</option>
               <option value="물리">물리</option>
               <option value="화학">화학</option>
               <option value="생명과학">생명과학</option>
@@ -348,7 +348,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
 
           {/* 자기소개 */}
           <div>
-            <label htmlFor="bio" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="bio" className="mb-1.5 sm:mb-2 block text-xs sm:text-sm font-medium text-slate-700">
               자기소개
             </label>
             <textarea
@@ -357,14 +357,14 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
               value={formData.bio}
               onChange={handleChange}
               rows={3}
-              className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-slate-300 px-3 sm:px-4 py-2 text-xs sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               placeholder="자기소개를 입력하세요"
             />
           </div>
 
           {/* 에러 메시지 */}
           {error && (
-            <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">
+            <div className="rounded-lg bg-red-50 p-2.5 sm:p-3 text-xs sm:text-sm text-red-600">
               {error}
             </div>
           )}
@@ -373,7 +373,7 @@ export default function RegisterModal({ onClose, onSuccess }: RegisterModalProps
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-lg bg-blue-600 px-4 py-2.5 sm:py-2 text-xs sm:text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "회원가입 중..." : "회원가입"}
           </button>

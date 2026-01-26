@@ -45,22 +45,14 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   const maxRetries = 3;
   let lastError: Error | null = null;
   
-  // 디버깅을 위한 로그 (항상 출력)
-  const path = pathSegments.join('/');
-  console.log(`[API Proxy] ========== 프록시 요청 시작 ==========`);
-  console.log(`[API Proxy] 경로: /api/${path}`);
-  console.log(`[API Proxy] 메서드: ${request.method}`);
-  console.log(`[API Proxy] BACKEND_URL: ${BACKEND_URL}`);
-  console.log(`[API Proxy] 요청 URL: ${request.url}`);
-  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      const path = pathSegments.join('/');
       const url = new URL(request.url);
       const searchParams = url.searchParams.toString();
       const queryString = searchParams ? `?${searchParams}` : '';
       
       const backendUrl = `${BACKEND_URL}/api/${path}${queryString}`;
-      console.log(`[API Proxy] 시도 ${attempt}/${maxRetries}: ${backendUrl}`);
       
       // 요청 본문 가져오기
       let body: BodyInit | undefined;
@@ -89,7 +81,6 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30초 타임아웃
       
       try {
-        console.log(`[API Proxy] 백엔드로 요청 전송: ${request.method} ${backendUrl}`);
         const response = await fetch(backendUrl, {
           method: request.method,
           headers,
@@ -98,7 +89,6 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
         });
         
         clearTimeout(timeoutId);
-        console.log(`[API Proxy] 백엔드 응답: ${response.status} ${response.statusText}`);
         
         // 비디오 스트리밍을 위한 처리
         const contentType = response.headers.get('content-type') || '';
@@ -140,7 +130,6 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
           }
         });
         
-        console.log(`[API Proxy] ✅ 프록시 성공: ${response.status} ${response.statusText}`);
         return new NextResponse(responseBody, {
           status: response.status,
           statusText: response.statusText,
@@ -148,25 +137,15 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
         });
       } catch (fetchError) {
         clearTimeout(timeoutId);
-        console.error(`[API Proxy] fetch 오류:`, fetchError);
         throw fetchError;
       }
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorStack = error instanceof Error ? error.stack : undefined;
-      
-      console.error(`[API Proxy] 오류 발생 (시도 ${attempt}/${maxRetries}):`, {
-        message: errorMessage,
-        stack: errorStack,
-        name: error instanceof Error ? error.name : 'Unknown',
-      });
       
       // ECONNREFUSED 오류인 경우 재시도
       if (error instanceof Error && 
-          (errorMessage.includes('ECONNREFUSED') || 
-           errorMessage.includes('fetch failed') ||
-           errorMessage.includes('ECONNREFUSED'))) {
+          (error.message.includes('ECONNREFUSED') || 
+           error.message.includes('fetch failed'))) {
         if (attempt < maxRetries) {
           const waitTime = attempt * 1000; // 1초, 2초, 3초 대기
           console.warn(`[API Proxy] 백엔드 연결 실패 (시도 ${attempt}/${maxRetries}), ${waitTime}ms 후 재시도...`);
@@ -176,21 +155,12 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
       }
       
       // 재시도 불가능한 오류이거나 최대 재시도 횟수 초과
-      console.error('[API Proxy] 최종 실패:', {
-        error: errorMessage,
-        backendUrl: `${BACKEND_URL}/api/${pathSegments.join('/')}`,
-        attempts: attempt,
-      });
-      
+      console.error('[API Proxy] Error:', error);
       return NextResponse.json(
         { 
           error: '프록시 요청 실패', 
           message: lastError.message,
-          backendUrl: `${BACKEND_URL}/api/${pathSegments.join('/')}`,
-          details: process.env.NODE_ENV === 'development' ? {
-            error: errorMessage,
-            stack: errorStack,
-          } : undefined
+          details: process.env.NODE_ENV === 'development' ? String(error) : undefined
         },
         { status: 503 } // Service Unavailable
       );

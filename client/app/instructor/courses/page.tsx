@@ -327,16 +327,16 @@ export default function InstructorCoursesPage() {
         </div>
 
         {/* 헤더 */}
-        <header className="mb-8">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
-                <BookOpen className="h-5 w-5" />
+        <header className="mb-6 sm:mb-8">
+          <div className="mb-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0">
+            <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+              <div className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-600 flex-shrink-0">
+                <BookOpen className="h-4 w-4 sm:h-5 sm:w-5" />
               </div>
-              <div className="flex-1">
-                <h1 className="text-3xl font-bold text-slate-900">내 강의 관리</h1>
-                <div className="mt-1">
-                  <p className="text-sm text-slate-500">
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900">내 강의 관리</h1>
+                <div className="mt-0.5 sm:mt-1">
+                  <p className="text-xs sm:text-sm text-slate-500">
                     {instructorName ? (
                       <>
                         <span className="font-medium text-slate-700">{instructorName} 선생님</span>
@@ -351,19 +351,20 @@ export default function InstructorCoursesPage() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
               <button
                 onClick={handleRefresh}
-                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-blue-500 hover:bg-blue-50"
+                className="flex-1 sm:flex-none rounded-lg border border-slate-300 bg-white px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-slate-700 transition-colors hover:border-blue-500 hover:bg-blue-50 whitespace-nowrap"
               >
                 새로고침
               </button>
               <button
                 onClick={() => setShowCreateCourseModal(true)}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-lg bg-blue-600 px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-white transition-colors hover:bg-blue-700 whitespace-nowrap"
               >
-                <Plus className="h-4 w-4" />
-                <span>강의 목록 생성</span>
+                <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">강의 목록 생성</span>
+                <span className="sm:hidden">생성</span>
               </button>
             </div>
           </div>
@@ -582,7 +583,7 @@ export default function InstructorCoursesPage() {
         {/* 강의 목록 생성 모달 */}
         {showCreateCourseModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="w-[80%] sm:w-full sm:max-w-md rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-xl">
               <div className="mb-6 flex items-center justify-between">
                 <h2 className="text-xl font-bold text-slate-900">강의 목록 생성</h2>
                 <button

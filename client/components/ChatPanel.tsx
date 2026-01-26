@@ -9,11 +9,12 @@ type Props = {
   courseId: string;
   courseTitle?: string;  // 강의명 (선택사항)
   instructorName?: string;  // 강사명 (선택사항)
+  instructorProfileImageUrl?: string | null;  // 강사 프로필 이미지 URL (선택사항)
   onTimestampClick?: (timeInSeconds: number) => void;
   currentTime?: number;  // 현재 비디오 재생 시간 (초)
 };
 
-export default function ChatPanel({ courseId, courseTitle, instructorName, onTimestampClick, currentTime }: Props) {
+export default function ChatPanel({ courseId, courseTitle, instructorName, instructorProfileImageUrl, onTimestampClick, currentTime }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -335,8 +336,8 @@ export default function ChatPanel({ courseId, courseTitle, instructorName, onTim
                 <div className="flex-shrink-0">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src="https://i.ibb.co/27yY0pLS/default-profile.png"
-                    alt="옆강 봇"
+                    src={instructorProfileImageUrl || "https://i.ibb.co/27yY0pLS/default-profile.png"}
+                    alt={instructorName || "옆강 봇"}
                     className="h-8 w-8 rounded-full object-cover border border-slate-200"
                   />
                 </div>

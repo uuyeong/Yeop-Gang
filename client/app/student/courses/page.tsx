@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, GraduationCap, User, AlertCircle, Loader2, BookOpen, Search, Filter } from "lucide-react";
+import { ArrowLeft, GraduationCap, User, AlertCircle, Loader2, BookOpen, Search, Filter, ChevronDown, ChevronUp } from "lucide-react";
 import { apiGet, handleApiError } from "../../../lib/api";
 
 type Course = {
@@ -13,6 +13,9 @@ type Course = {
   status: string;
   instructor_id: string;
   instructor_name?: string;
+  instructor_profile_image_url?: string | null;
+  instructor_specialization?: string | null;
+  instructor_bio?: string | null;
   created_at?: string;
   progress: number;
 };
@@ -20,6 +23,9 @@ type Course = {
 type InstructorInfo = {
   id: string;
   name?: string;
+  profile_image_url?: string | null;
+  specialization?: string | null;
+  bio?: string | null;
   courseCount: number;
 };
 
@@ -31,6 +37,7 @@ export default function StudentCoursesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [categories, setCategories] = useState<string[]>([]);
+  const [expandedBios, setExpandedBios] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchInstructors();
@@ -56,13 +63,28 @@ export default function StudentCoursesPage() {
       });
       setCategories(Array.from(categorySet).sort());
       
-      // instructor_id별로 그룹화 (이름도 함께 저장)
-      const instructorMap = new Map<string, { count: number; name?: string }>();
+      // instructor_id별로 그룹화 (이름, 프로필 사진, 전문 분야, 자기소개도 함께 저장)
+      const instructorMap = new Map<string, { 
+        count: number; 
+        name?: string; 
+        profile_image_url?: string | null;
+        specialization?: string | null;
+        bio?: string | null;
+      }>();
       courses.forEach((course) => {
-        const existing = instructorMap.get(course.instructor_id) || { count: 0, name: undefined };
+        const existing = instructorMap.get(course.instructor_id) || { 
+          count: 0, 
+          name: undefined,
+          profile_image_url: undefined,
+          specialization: undefined,
+          bio: undefined,
+        };
         instructorMap.set(course.instructor_id, {
           count: existing.count + 1,
           name: course.instructor_name || existing.name,
+          profile_image_url: course.instructor_profile_image_url || existing.profile_image_url,
+          specialization: course.instructor_specialization || existing.specialization,
+          bio: course.instructor_bio || existing.bio,
         });
       });
 
@@ -71,6 +93,9 @@ export default function StudentCoursesPage() {
         ([id, info]) => ({
           id,
           name: info.name,
+          profile_image_url: info.profile_image_url,
+          specialization: info.specialization,
+          bio: info.bio,
           courseCount: info.count,
         })
       );
@@ -189,29 +214,75 @@ export default function StudentCoursesPage() {
                 </p>
               </div>
             ) : (
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {instructors.map((instructor) => (
                   <Link
                     key={instructor.id}
                     href={`/student/courses/${instructor.id}`}
-                    className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all hover:border-blue-300 hover:shadow-lg"
+                    className="group rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm transition-all hover:border-blue-300 hover:shadow-lg flex flex-col max-w-sm mx-auto w-full"
                   >
-                    <div className="mb-4 flex items-center gap-4">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-                        <User className="h-6 w-6" />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg font-semibold text-slate-900 transition-colors group-hover:text-blue-600">
-                          {instructor.name || "강사"}
+                    {/* 프로필 사진 - 상단에 네모 형태로 */}
+                    <div className="mb-4 relative w-full aspect-square max-w-[200px] mx-auto">
+                      <img
+                        src={instructor.profile_image_url || "https://i.ibb.co/27yY0pLS/default-profile.png"}
+                        alt={instructor.name || "강사"}
+                        className="w-full h-full rounded-lg object-cover border-2 border-slate-200"
+                      />
+                    </div>
+                    
+                    {/* 선생님 정보 */}
+                    <div className="flex-1 flex flex-col text-center">
+                      <div className="flex items-center justify-center gap-2 mb-2">
+                        <h3 className="text-lg sm:text-xl font-semibold text-slate-900 transition-colors group-hover:text-blue-600">
+                          {instructor.name ? `${instructor.name} 선생님` : "강사"}
                         </h3>
-                        <p className="text-sm text-slate-600">
+                        {instructor.bio && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setExpandedBios((prev) => {
+                                const newSet = new Set(prev);
+                                if (newSet.has(instructor.id)) {
+                                  newSet.delete(instructor.id);
+                                } else {
+                                  newSet.add(instructor.id);
+                                }
+                                return newSet;
+                              });
+                            }}
+                            className="flex items-center gap-0.5 text-xs text-blue-600 hover:text-blue-700 transition-colors"
+                          >
+                            {expandedBios.has(instructor.id) ? (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-center gap-2 sm:gap-3 mb-2">
+                        {instructor.specialization && (
+                          <p className="text-sm sm:text-base text-blue-600 font-medium">
+                            {instructor.specialization}
+                          </p>
+                        )}
+                        {instructor.specialization && (
+                          <span className="text-slate-400">•</span>
+                        )}
+                        <p className="text-sm sm:text-base text-slate-600">
                           {instructor.courseCount}개 강의
                         </p>
                       </div>
+                      {instructor.bio && expandedBios.has(instructor.id) && (
+                        <p className="text-xs sm:text-sm text-slate-500 mb-0">
+                          {instructor.bio}
+                        </p>
+                      )}
                     </div>
-                    <div className="flex items-center justify-between rounded-lg bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors group-hover:bg-blue-100">
+                    <div className="flex items-center justify-between rounded-lg bg-blue-50 px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium text-blue-700 transition-colors group-hover:bg-blue-100 mt-4">
                       <span>강의 보기</span>
-                      <BookOpen className="h-4 w-4" />
+                      <BookOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     </div>
                   </Link>
                 ))}

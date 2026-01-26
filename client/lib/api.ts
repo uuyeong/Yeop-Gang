@@ -37,34 +37,11 @@ export type ApiError = {
 export function handleApiError(error: unknown): ApiError {
   // 네트워크 오류
   if (error instanceof TypeError && error.message.includes("fetch")) {
-    console.error('[handleApiError] 네트워크 오류 감지:', {
-      message: error.message,
-      name: error.name,
-      stack: error.stack,
-    });
     return {
       message:
         "네트워크 연결을 확인할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.",
       code: "NETWORK_ERROR",
     };
-  }
-  
-  // Error 객체이고 메시지에 특정 키워드가 포함된 경우
-  if (error instanceof Error) {
-    console.error('[handleApiError] Error 객체:', {
-      message: error.message,
-      name: error.name,
-      stack: error.stack,
-    });
-    
-    // 프록시 실패 메시지인 경우
-    if (error.message.includes('백엔드 서버에 연결할 수 없습니다') || 
-        error.message.includes('프록시 요청 실패')) {
-      return {
-        message: error.message,
-        code: "PROXY_ERROR",
-      };
-    }
   }
 
   // 일반 Error 객체
@@ -126,7 +103,6 @@ export async function apiFetch<T>(
       url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
     } else {
       // API_BASE_URL이 비어있으면 상대 경로 그대로 사용 (Next.js API Routes가 프록시)
-      // 브라우저 환경에서는 /api/...로 시작하는 경로가 Next.js API Routes로 자동 라우팅됨
       url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
     }
   }
@@ -156,39 +132,12 @@ export async function apiFetch<T>(
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    console.log(`[apiFetch] 요청 URL: ${url}`);
-    console.log(`[apiFetch] 메서드: ${options?.method || 'GET'}`);
-    console.log(`[apiFetch] API_BASE_URL: ${API_BASE_URL || '(빈 문자열 - 상대 경로 사용)'}`);
-    console.log(`[apiFetch] 브라우저 환경: ${typeof window !== 'undefined'}`);
-    
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        ...options,
-        headers,
-      });
-    } catch (fetchError) {
-      console.error(`[apiFetch] fetch 실패:`, fetchError);
-      // 네트워크 오류인 경우 더 자세한 정보 제공
-      if (fetchError instanceof TypeError) {
-        console.error(`[apiFetch] 네트워크 오류 상세:`, {
-          message: fetchError.message,
-          url: url,
-          isRelative: !url.startsWith('http'),
-        });
-      }
-      throw fetchError;
-    }
-
-    console.log(`[apiFetch] 응답 상태: ${response.status} ${response.statusText}`);
+    const response = await fetch(url, {
+      ...options,
+      headers,
+    });
 
     if (!response.ok) {
-      // 503 에러인 경우 프록시 실패로 간주
-      if (response.status === 503) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('[apiFetch] 프록시 실패:', errorData);
-        throw new Error(errorData.message || '백엔드 서버에 연결할 수 없습니다.');
-      }
       const errorMessage = getHttpErrorMessage(response.status);
       throw new Error(errorMessage);
     }

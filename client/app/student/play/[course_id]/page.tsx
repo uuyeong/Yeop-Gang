@@ -21,6 +21,7 @@ type CourseInfo = {
   category?: string;
   instructor_name?: string;
   instructor_id?: string;
+  instructor_profile_image_url?: string | null;
 };
 
 export default function StudentPlayPage({ params }: Props) {
@@ -66,9 +67,6 @@ export default function StudentPlayPage({ params }: Props) {
             <ArrowLeft className="h-4 w-4" />
             <span>뒤로 가기</span>
           </button>
-          <div className="rounded-full border border-blue-200 bg-blue-50 px-4 py-1 text-xs text-blue-700">
-            AI 챗봇 자동 생성
-          </div>
         </div>
         <div>
           <p className="text-xs uppercase tracking-widest text-slate-500">
@@ -136,6 +134,7 @@ export default function StudentPlayPage({ params }: Props) {
                   courseId={course_id}
                   courseTitle={courseInfo?.title}
                   instructorName={courseInfo?.instructor_name}
+                  instructorProfileImageUrl={courseInfo?.instructor_profile_image_url}
                   onTimestampClick={handleTimestampClick}
                   currentTime={currentVideoTime}
                 />

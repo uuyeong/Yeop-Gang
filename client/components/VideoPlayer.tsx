@@ -361,19 +361,19 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ src, courseId, onTimeUp
 
         {/* 자막 표시 영역 - 비디오 위에 오버레이 */}
         {subtitlesEnabled && (
-          <div className="absolute inset-0 pointer-events-none z-40 flex items-end justify-center pb-16">
+          <div className="absolute inset-0 pointer-events-none z-40 flex items-end justify-center pb-12 sm:pb-16">
             {currentSubtitle ? (
-              <div className="px-6 py-3 mx-4 mb-4 bg-black/75 backdrop-blur-sm text-white text-lg rounded-lg max-w-[90%] text-center shadow-2xl border border-white/10">
+              <div className="px-3 sm:px-4 md:px-6 py-2 sm:py-2.5 md:py-3 mx-2 sm:mx-4 mb-2 sm:mb-4 bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm md:text-base lg:text-lg rounded-lg max-w-[90%] text-center shadow-2xl border border-white/10">
                 <span className="whitespace-pre-wrap break-words leading-relaxed">
                   {currentSubtitle}
                 </span>
               </div>
             ) : subtitleLoading ? (
-              <div className="px-4 py-2 bg-black/50 text-white text-sm rounded">
+              <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-black/50 text-white text-xs sm:text-sm rounded">
                 자막 로딩 중...
               </div>
             ) : subtitleData.length === 0 ? (
-              <div className="px-4 py-2 bg-black/50 text-white text-sm rounded">
+              <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-black/50 text-white text-xs sm:text-sm rounded">
                 자막 없음
               </div>
             ) : null}
