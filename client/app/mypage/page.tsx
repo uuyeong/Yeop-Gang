@@ -284,9 +284,9 @@ export default function MyPage() {
               {/* 프로필 사진 */}
               <div className="relative flex-shrink-0 w-full sm:w-auto flex flex-col items-center sm:items-start">
                 <div
-                  className={`relative flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-full overflow-hidden border-2 ${
+                  className={`relative flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-full overflow-hidden border ${
                     isEditing && user.role === "instructor"
-                      ? "border-primary cursor-pointer hover:opacity-80 transition-opacity"
+                      ? "border-gray-300 cursor-pointer hover:opacity-80 transition-opacity"
                       : "border-gray-300"
                   }`}
                   onClick={handleImageClick}
