@@ -3,7 +3,7 @@
  * 별도 파일로 분리하여 번들링 문제 해결
  */
 
-import { API_BASE_URL, getHttpErrorMessage, handleApiError } from "./api";
+import { apiFetch, apiPost, apiPatch, apiGet, getHttpErrorMessage, handleApiError } from "./api";
 
 export type RegisterInstructorRequest = {
   id: string;
@@ -58,34 +58,15 @@ export type UpdateInstructorRequest = {
 export async function registerInstructor(
   data: RegisterInstructorRequest
 ): Promise<TokenResponse> {
-  const url = `${API_BASE_URL}/api/auth/register/instructor`;
-  console.log("회원가입 요청 URL:", url);
   console.log("회원가입 요청 데이터:", { ...data, password: "***" });
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(data),
-    });
-
-    console.log("회원가입 응답 상태:", response.status, response.statusText);
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error("회원가입 에러 응답:", errorData);
-      const errorMessage = errorData.detail || errorData.message || getHttpErrorMessage(response.status);
-      throw new Error(errorMessage);
-    }
-
-    const result = await response.json();
+    const result = await apiPost<TokenResponse>("/api/auth/register/instructor", data);
     console.log("회원가입 성공:", result);
     return result;
   } catch (error) {
     console.error("회원가입 예외:", error);
-    throw handleApiError(error);
+    throw error; // apiPost가 이미 handleApiError를 처리함
   }
 }
 
@@ -94,22 +75,9 @@ export async function registerInstructor(
  */
 export async function login(data: LoginRequest): Promise<TokenResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || getHttpErrorMessage(response.status));
-    }
-
-    return await response.json();
+    return await apiPost<TokenResponse>("/api/auth/login", data);
   } catch (error) {
-    throw handleApiError(error);
+    throw error; // apiPost가 이미 handleApiError를 처리함
   }
 }
 
@@ -119,25 +87,13 @@ export async function login(data: LoginRequest): Promise<TokenResponse> {
 export async function getInstructorProfile(
   token: string
 ): Promise<InstructorProfileResponse> {
-  const url = `${API_BASE_URL}/api/instructor/profile`;
-  
   try {
-    console.log("[authApi] 프로필 조회 요청:", url);
-    const response = await fetch(url, {
-      method: "GET",
+    console.log("[authApi] 프로필 조회 요청");
+    const result = await apiGet<InstructorProfileResponse>("/api/instructor/profile", {
       headers: {
         "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json",
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const errorMessage = errorData.detail || errorData.message || getHttpErrorMessage(response.status);
-      throw new Error(errorMessage);
-    }
-
-    const result = await response.json();
     console.log("[authApi] 프로필 조회 응답:", {
       ...result,
       profile_image_url: result.profile_image_url ? `${result.profile_image_url.substring(0, 50)}...` : null,
@@ -145,7 +101,7 @@ export async function getInstructorProfile(
     return result;
   } catch (error) {
     console.error("[authApi] 프로필 조회 예외:", error);
-    throw handleApiError(error);
+    throw error; // apiGet이 이미 handleApiError를 처리함
   }
 }
 
@@ -156,28 +112,23 @@ export async function updateInstructorProfile(
   token: string,
   data: UpdateInstructorRequest
 ): Promise<{ message: string; name?: string; email?: string; profile_image_url?: string | null; [k: string]: unknown }> {
-  const url = `${API_BASE_URL}/api/instructor/profile`;
   console.log("[authApi] 프로필 업데이트 요청:", {
     ...data,
     profile_image_url: data.profile_image_url ? `${data.profile_image_url.substring(0, 50)}...` : null,
   });
-  const response = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const msg = errorData.detail || errorData.message || getHttpErrorMessage(response.status);
-    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  try {
+    const result = await apiPatch<{ message: string; name?: string; email?: string; profile_image_url?: string | null; [k: string]: unknown }>("/api/instructor/profile", data, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    console.log("[authApi] 프로필 업데이트 응답:", {
+      ...result,
+      profile_image_url: result.profile_image_url ? `${result.profile_image_url.substring(0, 50)}...` : null,
+    });
+    return result;
+  } catch (error) {
+    console.error("[authApi] 프로필 업데이트 예외:", error);
+    throw error; // apiPatch가 이미 handleApiError를 처리함
   }
-  const result = await response.json();
-  console.log("[authApi] 프로필 업데이트 응답:", {
-    ...result,
-    profile_image_url: result.profile_image_url ? `${result.profile_image_url.substring(0, 50)}...` : null,
-  });
-  return result;
 }
