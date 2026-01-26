@@ -9,6 +9,8 @@ RUN npm ci --prefer-offline --no-audit
 
 # Client 소스 코드 복사 및 빌드 (소스 코드만 변경되면 이 레이어부터 재빌드)
 COPY client/ .
+# NEXT_PUBLIC_API_URL: 빌드 시점에 설정 (외부 백엔드 URL 사용 시)
+# 설정하지 않으면 기본값 http://localhost:8000 사용 (같은 컨테이너 내 백엔드)
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 # public 디렉토리가 없으면 빈 디렉토리 생성 (standalone 빌드를 위해)

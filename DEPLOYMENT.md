@@ -57,15 +57,25 @@
 | `DATABASE_URL` | `sqlite:///./server/data/yeopgang.db` | SQLite 데이터베이스 경로 | ✅ 필수 |
 | `DATA_ROOT` | `server/data` | 데이터 파일 저장 루트 디렉토리 | ✅ 필수 |
 | `CHROMA_DB_PATH` | `server/data/chroma` | ChromaDB 벡터 저장소 경로 | ✅ 필수 |
-| `NEXT_PUBLIC_API_URL` | (설정하지 않음) | 프론트엔드 API URL - 통합 배포 시 **설정하지 않음** | ❌ |
+| `NEXT_PUBLIC_API_URL` | (선택사항) | 프론트엔드 API URL | ❌ |
 | `LLM_MODEL` | `gpt-4o-mini` | 사용할 LLM 모델 (선택사항) | ❌ |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | 사용할 임베딩 모델 (선택사항) | ❌ |
 
-> **중요**: 통합 배포에서는 `NEXT_PUBLIC_API_URL`을 **설정하지 않습니다**. 
-> - 같은 컨테이너 내에서 실행되므로 프론트엔드가 `http://localhost:8000`으로 백엔드에 접근합니다.
-> - Next.js API Routes 프록시가 자동으로 백엔드로 요청을 전달합니다.
+> **중요**: `NEXT_PUBLIC_API_URL` 설정 방법:
+> 
+> **옵션 1: 같은 컨테이너 내 백엔드 사용 (기본값)**
+> - `NEXT_PUBLIC_API_URL`을 **설정하지 않음**
+> - 프론트엔드가 `http://localhost:8000`으로 같은 컨테이너 내 백엔드에 접근
+> - Next.js API Routes 프록시가 자동으로 백엔드로 요청을 전달
+> 
+> **옵션 2: 외부 백엔드 URL 사용**
+> - `NEXT_PUBLIC_API_URL`을 **외부 백엔드 URL로 설정** (예: `https://yeopgang-backend.onrender.com`)
+> - 프론트엔드가 외부 백엔드 서비스로 직접 접근
+> - 백엔드를 별도 서비스로 먼저 배포해야 함
 
 #### 환경 변수 설정 예시
+
+**옵션 1: 같은 컨테이너 내 백엔드 사용 (기본)**
 
 Render 대시보드의 **Environment** 탭에서:
 
@@ -74,16 +84,46 @@ OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
 DATABASE_URL=sqlite:///./server/data/yeopgang.db
 DATA_ROOT=server/data
 CHROMA_DB_PATH=server/data/chroma
+# NEXT_PUBLIC_API_URL은 설정하지 않음
 ```
+
+**옵션 2: 외부 백엔드 URL 사용**
+
+먼저 백엔드를 별도 서비스로 배포한 후 (분리 배포의 "1. 백엔드 배포" 참고), 통합 배포 시:
+
+```
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+DATABASE_URL=sqlite:///./server/data/yeopgang.db
+DATA_ROOT=server/data
+CHROMA_DB_PATH=server/data/chroma
+NEXT_PUBLIC_API_URL=https://yeopgang-backend.onrender.com
+```
+
+> **참고**: 외부 백엔드 URL을 사용하는 경우, 통합 배포의 백엔드는 실행되지 않습니다. 프론트엔드만 실행되며 외부 백엔드로 요청을 보냅니다.
 
 **장점**: 
 - 하나의 서비스로 관리 (간단함)
 - 하나의 포트만 노출 (Render 무료 플랜에 적합)
 - 서비스 간 통신이 빠름 (같은 컨테이너 내)
+- 외부 백엔드 URL 사용 가능 (옵션)
 
 **단점**: 
 - 두 서비스가 하나의 컨테이너에서 실행 (독립적 스케일링 불가)
-- 프록시 설정 필요 (Next.js API Routes 사용)
+- 프록시 설정 필요 (Next.js API Routes 사용, 외부 URL 사용 시 불필요)
+
+#### 외부 백엔드 URL 사용 방법
+
+통합 배포에서도 외부 백엔드 URL을 사용할 수 있습니다:
+
+1. **백엔드를 별도 서비스로 먼저 배포** (분리 배포의 "1. 백엔드 배포" 참고)
+2. **통합 배포 시 Render 환경 변수에 `NEXT_PUBLIC_API_URL` 설정**
+   - Render 대시보드 → 서비스 설정 → Environment
+   - `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com` (백엔드 URL)
+3. **Dockerfile 빌드 시 환경 변수 전달**
+   - Render는 자동으로 환경 변수를 빌드 컨텍스트에 전달
+   - Dockerfile의 `ARG NEXT_PUBLIC_API_URL`이 환경 변수 값을 받음
+
+> **참고**: 외부 백엔드 URL을 사용하는 경우, 통합 배포의 백엔드는 실행되지 않습니다. 프론트엔드만 실행되며 외부 백엔드로 요청을 보냅니다.
 
 ---
 
