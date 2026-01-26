@@ -434,22 +434,22 @@ def process_course_assets(
                                     page_num = page_idx + 1
                                     print(f"[{course_id}] ⚠️ PDF 메타데이터에 page_number가 없어서 {page_num}로 설정")
 
-                                page_meta = {
-                                    "course_id": course_id,
-                                    "instructor_id": instructor_id,
-                                    "source": pdf_path.name,
+                            page_meta = {
+                                "course_id": course_id,
+                                "instructor_id": instructor_id,
+                                "source": pdf_path.name,
                                     "page_number": page_num,  # 명시적으로 int로 저장
-                                    "type": "pdf_page",
-                                }
+                                "type": "pdf_page",
+                            }
                                 print(f"[{course_id}] 📄 PDF 페이지 {page_num} 인제스트: {pdf_text[:50]}...")
 
                                 batch_texts.append(pdf_text)
                                 batch_metas.append(page_meta)
-                                
-                                # 진행률 업데이트 (70% ~ 75%)
-                                if update_progress and total_pages > 0:
-                                    pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
-                                    update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
+                            
+                            # 진행률 업데이트 (70% ~ 75%)
+                            if update_progress and total_pages > 0:
+                                pdf_progress = 70 + int((page_idx + 1) / total_pages * 5)
+                                update_progress(pdf_progress, f"PDF 페이지 처리 중... ({page_idx + 1}/{total_pages})")
                             except Exception as page_error:
                                 print(f"[{course_id}] ⚠️ PDF 페이지 {page_idx + 1} 인제스트 오류: {page_error}")
                                 # 개별 페이지 오류는 건너뛰고 계속 진행
@@ -619,11 +619,11 @@ def process_course_assets(
                     # instructor_info는 분석 시에만 참고하고, 페르소나 프롬프트에는 포함하지 않음
                 else:
                     # 기존 방식 (fallback) - 강사 정보는 포함하지 않음 (DB에서 동적으로 로드)
-                    persona_prompt = pipeline.generate_persona_prompt(
+                persona_prompt = pipeline.generate_persona_prompt(
                         course_id=course_id,
                         sample_texts=texts,
                         instructor_info=None  # ChromaDB에 저장하지 않음
-                    )
+                )
                 
                 if update_progress:
                     update_progress(85, "페르소나 저장 중...")
