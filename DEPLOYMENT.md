@@ -16,9 +16,24 @@
 
 **render.yaml은 필수가 아닙니다.** Render 대시보드에서 서비스를 직접 만들면 됩니다.
 
-### 방법 1: 통합 Dockerfile 사용 (권장) ⭐
+### 방법 1: 분리 배포 (권장) ⭐
+
+**Client와 Server를 별도 서비스로 배포합니다. 프론트엔드가 백엔드의 외부 URL로 직접 연결합니다.**
+
+**장점**: 
+- 각 서비스를 독립적으로 관리
+- 프록시 없이 직접 연결 (더 간단하고 안정적)
+- 서비스별로 독립적으로 스케일링 가능
+
+**단점**: 
+- 두 개의 서비스를 관리해야 함
+- 무료 플랜에서는 두 서비스 모두 슬립 가능
+
+### 방법 2: 통합 Dockerfile 사용 (기존 방식)
 
 **하나의 서비스로 Client와 Server를 함께 배포합니다.**
+
+#### 배포 단계
 
 1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
 2. GitHub 저장소 연결 후 이 프로젝트 선택
@@ -29,24 +44,54 @@
    - **Dockerfile Path**: `Dockerfile` (root의 Dockerfile)
    - **Docker Context**: `.` (프로젝트 루트)
    - **Plan**: **Free**
-4. **Environment** 탭에서 **Add Environment Variable**:
-   - `OPENAI_API_KEY` = (본인 OpenAI 키)
-   - `DATABASE_URL` = `sqlite:///./server/data/yeopgang.db`
-   - `DATA_ROOT` = `server/data`
-   - `CHROMA_DB_PATH` = `server/data/chroma`
-   - `NEXT_PUBLIC_API_URL` = (설정하지 않음 - Next.js rewrites가 자동으로 프록시)
+4. **Environment** 탭에서 **Add Environment Variable** (아래 표 참고)
 5. **Create Web Service** 클릭
 
-> **참고**: `NEXT_PUBLIC_API_URL`은 설정하지 않아도 됩니다. 같은 컨테이너 내에서 실행되므로 Next.js rewrites가 자동으로 백엔드로 프록시합니다.
+#### 환경 변수 설정
 
-**장점**: 하나의 서비스로 관리, 간단함  
-**단점**: 두 서비스가 하나의 컨테이너에서 실행 (무료 플랜에서는 문제없음)
+통합 배포 시 다음 환경 변수를 설정해야 합니다:
 
-### 방법 2: 분리된 Dockerfile 사용 (기존 방식)
+| 변수명 | 값 | 설명 | 필수 |
+|--------|-----|------|------|
+| `OPENAI_API_KEY` | `your_openai_api_key` | OpenAI API 키 | ✅ 필수 |
+| `DATABASE_URL` | `sqlite:///./server/data/yeopgang.db` | SQLite 데이터베이스 경로 | ✅ 필수 |
+| `DATA_ROOT` | `server/data` | 데이터 파일 저장 루트 디렉토리 | ✅ 필수 |
+| `CHROMA_DB_PATH` | `server/data/chroma` | ChromaDB 벡터 저장소 경로 | ✅ 필수 |
+| `NEXT_PUBLIC_API_URL` | (설정하지 않음) | 프론트엔드 API URL - 통합 배포 시 **설정하지 않음** | ❌ |
+| `LLM_MODEL` | `gpt-4o-mini` | 사용할 LLM 모델 (선택사항) | ❌ |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | 사용할 임베딩 모델 (선택사항) | ❌ |
 
-**Client와 Server를 별도 서비스로 배포합니다.**
+> **중요**: 통합 배포에서는 `NEXT_PUBLIC_API_URL`을 **설정하지 않습니다**. 
+> - 같은 컨테이너 내에서 실행되므로 프론트엔드가 `http://localhost:8000`으로 백엔드에 접근합니다.
+> - Next.js API Routes 프록시가 자동으로 백엔드로 요청을 전달합니다.
+
+#### 환경 변수 설정 예시
+
+Render 대시보드의 **Environment** 탭에서:
+
+```
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+DATABASE_URL=sqlite:///./server/data/yeopgang.db
+DATA_ROOT=server/data
+CHROMA_DB_PATH=server/data/chroma
+```
+
+**장점**: 
+- 하나의 서비스로 관리 (간단함)
+- 하나의 포트만 노출 (Render 무료 플랜에 적합)
+- 서비스 간 통신이 빠름 (같은 컨테이너 내)
+
+**단점**: 
+- 두 서비스가 하나의 컨테이너에서 실행 (독립적 스케일링 불가)
+- 프록시 설정 필요 (Next.js API Routes 사용)
+
+---
+
+#### 1. 백엔드 배포 (분리 배포)
 
 #### 1. 백엔드 배포
+
+**단계별 배포:**
 
 1. [Render](https://render.com) 로그인 → **Dashboard** → **New +** → **Web Service**
 2. GitHub 저장소 연결 후 이 프로젝트 선택
@@ -64,21 +109,37 @@
    - `CHROMA_DB_PATH` = `data/chroma`
 5. **Create Web Service** 클릭
 
-배포가 끝나면 **URL**이 나옵니다. 예: `https://yeopgang-backend.onrender.com` → **복사해 두기.**
+배포가 끝나면 **URL**이 나옵니다. 예: `https://yeopgang-backend.onrender.com` → **이 URL을 복사해 두세요!**
 
 #### 2. 프론트엔드 배포
 
 1. **New +** → **Web Service** → 같은 저장소 선택
 2. 설정:
    - **Name**: `yeopgang-frontend`
+   - **Region**: Singapore (가까운 지역)
    - **Runtime**: **Docker**
    - **Dockerfile Path**: `client/Dockerfile`
    - **Docker Context**: `client`
    - **Plan**: **Free**
 3. **Environment**:
    - `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com`  
-     (위에서 복사한 백엔드 URL로 **반드시** 변경)
+     ⚠️ **위에서 복사한 백엔드 URL로 반드시 변경하세요!**
 4. **Create Web Service** 클릭
+
+> **중요**: 프론트엔드의 `NEXT_PUBLIC_API_URL`은 백엔드 서비스의 실제 외부 URL이어야 합니다. 예: `https://yeopgang-backend.onrender.com`
+
+#### 분리 배포 환경 변수 요약
+
+**백엔드 서비스:**
+- `OPENAI_API_KEY` (필수)
+- `DATABASE_URL` = `sqlite:///./data/yeopgang.db`
+- `DATA_ROOT` = `data`
+- `CHROMA_DB_PATH` = `data/chroma`
+
+**프론트엔드 서비스:**
+- `NEXT_PUBLIC_API_URL` = `https://yeopgang-backend.onrender.com` (백엔드 URL)
+
+---
 
 ### 3. 무료 플랜 안내
 
