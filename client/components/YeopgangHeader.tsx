@@ -39,14 +39,23 @@ export default function YeopgangHeader() {
     setUser(getUser());
   }, []);
 
-  useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 50);
-    };
+  // 스크롤 시 네비게이션 바 숨기기 기능 비활성화 (항상 표시)
+  // useEffect(() => {
+  //   let ticking = false;
+  //   
+  //   const handleScroll = () => {
+  //     if (!ticking) {
+  //       window.requestAnimationFrame(() => {
+  //         setIsScrolled(window.scrollY > 50);
+  //         ticking = false;
+  //       });
+  //       ticking = true;
+  //     }
+  //   };
 
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  //   window.addEventListener('scroll', handleScroll, { passive: true });
+  //   return () => window.removeEventListener('scroll', handleScroll);
+  // }, []);
 
   const handleLoginSuccess = () => {
     setShowLoginModal(false);
@@ -303,7 +312,10 @@ export default function YeopgangHeader() {
 
       {/* Navigation */}
       {!shouldHideNav && (
-        <nav className={`bg-white text-gray-900 pt-3 sm:pt-4 md:pt-5 pb-3 sm:pb-4 transition-all duration-300 ${isScrolled ? 'hidden' : 'block'}`} style={{ borderBottom: '0.5px solid #d1d5db' }}>
+        <nav 
+          className="bg-white text-gray-900 pt-3 sm:pt-4 md:pt-5 pb-3 sm:pb-4" 
+          style={{ borderBottom: '0.5px solid #d1d5db' }}
+        >
           <div className="container">
             <ul className="flex items-center justify-center gap-4 sm:gap-8 md:gap-12 font-medium text-sm sm:text-base md:text-lg">
               <li>
