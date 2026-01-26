@@ -26,8 +26,6 @@ if [ "$USE_EXTERNAL_BACKEND" = false ]; then
   BACKEND_PID=$!
   echo "✅ 백엔드 서버 시작 (PID: $BACKEND_PID) - 포트: $BACKEND_PORT"
 
-# 외부 백엔드를 사용하지 않는 경우에만 백엔드 준비 대기
-if [ "$USE_EXTERNAL_BACKEND" = false ]; then
   # 백엔드가 준비될 때까지 대기 (최대 30초)
   echo "⏳ 백엔드 서버 준비 대기 중..."
   MAX_WAIT=30
