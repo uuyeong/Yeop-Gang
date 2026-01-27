@@ -1,8 +1,8 @@
-# FastAPI 및 웹 프레임워크
+# FastAPI and Web Framework
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 
-# AI/ML 라이브러리
+# AI/ML Libraries
 openai==1.60.2
 langchain==0.3.7
 langchain-community==0.3.7
@@ -10,23 +10,23 @@ langchain-openai==0.2.6
 chromadb==0.5.11
 sentence-transformers==3.2.1
 
-# 데이터베이스 및 ORM
+# Database and ORM
 sqlmodel==0.0.22
 sqlalchemy==2.0.35
 aiosqlite==0.20.0
 
-# 데이터 검증 및 설정
+# Data Validation and Settings
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 email-validator==2.1.1
 
-# 인증 및 보안
+# Authentication and Security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 
-# 유틸리티
+# Utilities
 tiktoken==0.7.0
 httpx==0.27.2
 rich==13.9.2
@@ -37,15 +37,15 @@ markdown==3.10
 openai-whisper==20231117
 pydub==0.25.1
 
-# Backend A: PDF 처리 (멀티모달 - 텍스트 및 이미지)
+# Backend A: PDF Processing (Multimodal - Text and Images)
 pymupdf==1.24.0
 Pillow==10.4.0
 
-# 한국어 맞춤법 검사 (선택적 - 빌드 문제로 인해 제외)
+# Korean Spell Checker (Optional - Excluded due to build issues)
 # py-hanspell==1.1
-# 참고: py-hanspell은 빌드 오류로 인해 requirements.txt에서 제외되었습니다.
-#       필요시 수동으로 설치하거나, 코드는 ImportError를 처리하므로 없어도 동작합니다.
+# Note: py-hanspell is excluded from requirements.txt due to build errors.
+#       Install manually if needed. Code handles ImportError so it works without it.
 
-# 참고사항:
+# Notes:
 # - langchain-openai 0.2.6 requires openai>=1.54.0,<2.0.0
-# - ffmpeg는 시스템에 별도 설치 필요 (Whisper STT 사용 시)
+# - ffmpeg must be installed separately on the system (for Whisper STT)

@@ -58,12 +58,13 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
       const backendUrl = `${BACKEND_URL}/api/${path}${queryString}`;
       console.log(`[API Proxy] 시도 ${attempt}/${maxRetries}: ${backendUrl}`);
       
-      // 요청 본문 가져오기 (GET/HEAD 요청은 body가 없어야 함)
-      let body: BodyInit | undefined;
+      // GET/HEAD 요청은 body를 포함하면 안 됨
       const method = request.method.toUpperCase();
-      const isGetOrHead = method === 'GET' || method === 'HEAD';
+      const canHaveBody = !['GET', 'HEAD'].includes(method);
       
-      if (!isGetOrHead) {
+      // 요청 본문 가져오기 (GET/HEAD가 아닌 경우에만)
+      let body: BodyInit | undefined;
+      if (canHaveBody) {
         const contentType = request.headers.get('content-type');
         
         if (contentType?.includes('multipart/form-data')) {
@@ -94,6 +95,7 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
         const fetchOptions: RequestInit = {
           method: request.method,
           headers,
+          body: canHaveBody ? body : undefined,
           signal: controller.signal,
         };
         
