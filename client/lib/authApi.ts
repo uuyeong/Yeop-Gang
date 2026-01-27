@@ -1,9 +1,11 @@
 /**
  * 인증 관련 API 함수
  * 별도 파일로 분리하여 번들링 문제 해결
+ * 
+ * 통합 배포 전용: 브라우저에서 상대 경로 사용 → Next.js API Routes 프록시
  */
 
-import { getApiBaseUrlValue, getHttpErrorMessage, handleApiError } from "./api";
+import { getHttpErrorMessage, handleApiError } from "./api";
 
 export type RegisterInstructorRequest = {
   id: string;
@@ -58,8 +60,8 @@ export type UpdateInstructorRequest = {
 export async function registerInstructor(
   data: RegisterInstructorRequest
 ): Promise<TokenResponse> {
-  const API_BASE_URL = getApiBaseUrlValue();
-  const url = `${API_BASE_URL}/api/auth/register/instructor`;
+  // 통합 배포: 상대 경로 사용 → Next.js API Routes 프록시 → 내부 백엔드
+  const url = `/api/auth/register/instructor`;
   console.log("회원가입 요청 URL:", url);
   console.log("회원가입 요청 데이터:", { ...data, password: "***" });
 
@@ -95,8 +97,8 @@ export async function registerInstructor(
  */
 export async function login(data: LoginRequest): Promise<TokenResponse> {
   try {
-    const API_BASE_URL = getApiBaseUrlValue();
-    const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    // 통합 배포: 상대 경로 사용 → Next.js API Routes 프록시 → 내부 백엔드
+    const response = await fetch(`/api/auth/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -121,8 +123,8 @@ export async function login(data: LoginRequest): Promise<TokenResponse> {
 export async function getInstructorProfile(
   token: string
 ): Promise<InstructorProfileResponse> {
-  const API_BASE_URL = getApiBaseUrlValue();
-  const url = `${API_BASE_URL}/api/instructor/profile`;
+  // 통합 배포: 상대 경로 사용 → Next.js API Routes 프록시 → 내부 백엔드
+  const url = `/api/instructor/profile`;
   
   try {
     console.log("[authApi] 프로필 조회 요청:", url);
@@ -159,8 +161,8 @@ export async function updateInstructorProfile(
   token: string,
   data: UpdateInstructorRequest
 ): Promise<{ message: string; name?: string; email?: string; profile_image_url?: string | null; [k: string]: unknown }> {
-  const API_BASE_URL = getApiBaseUrlValue();
-  const url = `${API_BASE_URL}/api/instructor/profile`;
+  // 통합 배포: 상대 경로 사용 → Next.js API Routes 프록시 → 내부 백엔드
+  const url = `/api/instructor/profile`;
   console.log("[authApi] 프로필 업데이트 요청:", {
     ...data,
     profile_image_url: data.profile_image_url ? `${data.profile_image_url.substring(0, 50)}...` : null,

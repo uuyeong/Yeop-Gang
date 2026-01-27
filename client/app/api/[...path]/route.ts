@@ -1,10 +1,11 @@
 /**
  * Next.js API Routes 프록시
- * Render 환경에서 클라이언트 사이드 요청을 백엔드로 프록시
+ * 통합 배포: 브라우저 요청을 같은 컨테이너 내 백엔드로 프록시
  */
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// 통합 배포: 같은 컨테이너 내 백엔드 (localhost:8000)
+const BACKEND_URL = 'http://localhost:8000';
 
 export async function GET(
   request: NextRequest,
@@ -45,14 +46,8 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   const maxRetries = 3;
   let lastError: Error | null = null;
   
-  // 디버깅을 위한 로그 (항상 출력)
   const path = pathSegments.join('/');
-  console.log(`[API Proxy] ========== 프록시 요청 시작 ==========`);
-  console.log(`[API Proxy] 경로: /api/${path}`);
-  console.log(`[API Proxy] 메서드: ${request.method}`);
-  console.log(`[API Proxy] BACKEND_URL: ${BACKEND_URL}`);
-  console.log(`[API Proxy] 요청 URL: ${request.url}`);
-  console.log(`[API Proxy] NEXT_PUBLIC_API_URL: ${process.env.NEXT_PUBLIC_API_URL || '(설정되지 않음 - localhost:8000 사용)'}`);
+  console.log(`[API Proxy] ${request.method} /api/${path} → ${BACKEND_URL}/api/${path}`);
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Upload, FileVideo, FileAudio, FileText, X, CheckCircle2, AlertCircle } from "lucide-react";
 import ProgressBar from "./ProgressBar";
-import { API_BASE_URL, apiGet, apiUpload, handleApiError, type ApiError } from "../lib/api";
+import { apiGet, apiUpload, handleApiError, type ApiError } from "../lib/api";
 import { getToken } from "../lib/auth";
 
 type Props = {
