@@ -337,7 +337,7 @@ export default function ChatPanel({ courseId, courseTitle, instructorName, instr
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={instructorProfileImageUrl || "https://i.ibb.co/27yY0pLS/default-profile.png"}
-                    alt={instructorName || "옆강 봇"}
+                    alt={instructorName || "선생님"}
                     className="h-8 w-8 rounded-full object-cover border border-slate-200"
                   />
                 </div>
@@ -346,11 +346,9 @@ export default function ChatPanel({ courseId, courseTitle, instructorName, instr
               {/* 말풍선 영역 */}
               {msg.role === "assistant" ? (
                 <div className="flex flex-col gap-1">
-                  {instructorName && (
-                    <span className="text-xs text-slate-500 px-1">
-                      {instructorName}
-                    </span>
-                  )}
+                  <span className="text-xs text-slate-500 px-1">
+                    {instructorName || "선생님"}
+                  </span>
                   <div
                     className="rounded-2xl bg-white rounded-bl-sm px-3 py-2 max-w-[75%] shadow-sm"
                   >
@@ -397,13 +395,13 @@ export default function ChatPanel({ courseId, courseTitle, instructorName, instr
             <div className="flex-shrink-0">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="https://i.ibb.co/27yY0pLS/default-profile.png"
-                alt="옆강 봇"
+                src={instructorProfileImageUrl || "https://i.ibb.co/27yY0pLS/default-profile.png"}
+                alt={instructorName || "선생님"}
                 className="h-8 w-8 rounded-full object-cover border border-slate-200"
               />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-slate-500 px-1">옆강 봇</span>
+              <span className="text-xs text-slate-500 px-1">{instructorName || "선생님"}</span>
               <div className="bg-white border border-slate-200 rounded-2xl px-4 py-2.5 shadow-sm">
                 <div className="flex items-center gap-2 text-slate-500">
                   <div className="flex gap-1">
