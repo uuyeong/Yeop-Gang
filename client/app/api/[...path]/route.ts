@@ -52,6 +52,7 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   console.log(`[API Proxy] 메서드: ${request.method}`);
   console.log(`[API Proxy] BACKEND_URL: ${BACKEND_URL}`);
   console.log(`[API Proxy] 요청 URL: ${request.url}`);
+  console.log(`[API Proxy] NEXT_PUBLIC_API_URL: ${process.env.NEXT_PUBLIC_API_URL || '(설정되지 않음 - localhost:8000 사용)'}`);
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {

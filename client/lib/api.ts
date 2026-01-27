@@ -5,7 +5,7 @@
  * - 에러 처리
  */
 
-// API 기본 URL 결정
+// API 기본 URL 결정 함수 (런타임에 호출)
 // 통합 배포: Next.js API Routes 프록시 사용 (상대 경로)
 // 분리 배포: NEXT_PUBLIC_API_URL 환경 변수 사용 (백엔드 외부 URL)
 // 로컬 개발: 브라우저는 프록시 사용, 서버는 localhost:8000
@@ -25,7 +25,8 @@ const getApiBaseUrl = () => {
   return "http://localhost:8000";
 };
 
-export const API_BASE_URL = getApiBaseUrl();
+// 런타임에 호출하도록 함수로 export (빌드 타임 고정 방지)
+export const getApiBaseUrlValue = () => getApiBaseUrl();
 
 export type ApiError = {
   message: string;
@@ -93,6 +94,9 @@ export async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
+  // 런타임에 API_BASE_URL 결정 (빌드 타임 고정 방지)
+  const API_BASE_URL = getApiBaseUrl();
+  
   // URL 생성
   let url: string;
   if (endpoint.startsWith("http")) {
@@ -221,6 +225,9 @@ export async function apiUpload<T>(
   formData: FormData,
   options?: RequestInit
 ): Promise<T> {
+  // 런타임에 API_BASE_URL 결정 (빌드 타임 고정 방지)
+  const API_BASE_URL = getApiBaseUrl();
+  
   // URL 생성 (apiFetch와 동일한 로직)
   let url: string;
   if (endpoint.startsWith("http")) {

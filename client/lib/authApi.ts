@@ -3,7 +3,7 @@
  * 별도 파일로 분리하여 번들링 문제 해결
  */
 
-import { API_BASE_URL, getHttpErrorMessage, handleApiError } from "./api";
+import { getApiBaseUrlValue, getHttpErrorMessage, handleApiError } from "./api";
 
 export type RegisterInstructorRequest = {
   id: string;
@@ -58,6 +58,7 @@ export type UpdateInstructorRequest = {
 export async function registerInstructor(
   data: RegisterInstructorRequest
 ): Promise<TokenResponse> {
+  const API_BASE_URL = getApiBaseUrlValue();
   const url = `${API_BASE_URL}/api/auth/register/instructor`;
   console.log("회원가입 요청 URL:", url);
   console.log("회원가입 요청 데이터:", { ...data, password: "***" });
@@ -94,6 +95,7 @@ export async function registerInstructor(
  */
 export async function login(data: LoginRequest): Promise<TokenResponse> {
   try {
+    const API_BASE_URL = getApiBaseUrlValue();
     const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: "POST",
       headers: {
@@ -119,6 +121,7 @@ export async function login(data: LoginRequest): Promise<TokenResponse> {
 export async function getInstructorProfile(
   token: string
 ): Promise<InstructorProfileResponse> {
+  const API_BASE_URL = getApiBaseUrlValue();
   const url = `${API_BASE_URL}/api/instructor/profile`;
   
   try {
@@ -156,6 +159,7 @@ export async function updateInstructorProfile(
   token: string,
   data: UpdateInstructorRequest
 ): Promise<{ message: string; name?: string; email?: string; profile_image_url?: string | null; [k: string]: unknown }> {
+  const API_BASE_URL = getApiBaseUrlValue();
   const url = `${API_BASE_URL}/api/instructor/profile`;
   console.log("[authApi] 프로필 업데이트 요청:", {
     ...data,
