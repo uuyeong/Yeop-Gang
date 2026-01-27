@@ -3,7 +3,7 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { AlertCircle } from "lucide-react";
 import type { ChatMessage } from "../lib/types";
-import { API_BASE_URL, apiPost, apiGet, handleApiError } from "../lib/api";
+import { apiPost, apiGet, handleApiError } from "../lib/api";
 
 type Props = {
   courseId: string;

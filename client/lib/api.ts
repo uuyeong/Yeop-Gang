@@ -3,30 +3,21 @@
  * - API 기본 URL 관리
  * - 공통 fetch 함수
  * - 에러 처리
+ * 
+ * 통합 배포 전용:
+ * - 브라우저: 상대 경로 사용 → Next.js API Routes 프록시 → 내부 백엔드
+ * - 서버(SSR/API Routes): http://localhost:8000 직접 접근
  */
 
-// API 기본 URL 결정 함수 (런타임에 호출)
-// 통합 배포: Next.js API Routes 프록시 사용 (상대 경로)
-// 분리 배포: NEXT_PUBLIC_API_URL 환경 변수 사용 (백엔드 외부 URL)
-// 로컬 개발: 브라우저는 프록시 사용, 서버는 localhost:8000
+// API 기본 URL (통합 배포 전용)
 const getApiBaseUrl = () => {
-  // 환경 변수가 설정되어 있으면 사용 (외부 배포 시 백엔드 URL)
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
-  }
-  
-  // 브라우저 환경에서는 상대 경로 사용 (Next.js API Routes 프록시)
-  // 통합 배포 시 같은 컨테이너 내 백엔드에 접근하기 위해 프록시 사용
+  // 브라우저: 상대 경로 사용 (Next.js API Routes 프록시로 전달)
   if (typeof window !== 'undefined') {
-    return ''; // 상대 경로 사용 → /api/... → Next.js API Routes 프록시
+    return '';
   }
-  
-  // 서버 사이드에서는 절대 URL 사용 (SSR, API Routes 등)
-  return "http://localhost:8000";
+  // 서버: 같은 컨테이너 내 백엔드 직접 접근
+  return 'http://localhost:8000';
 };
-
-// 런타임에 호출하도록 함수로 export (빌드 타임 고정 방지)
-export const getApiBaseUrlValue = () => getApiBaseUrl();
 
 export type ApiError = {
   message: string;
@@ -94,24 +85,16 @@ export async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  // 런타임에 API_BASE_URL 결정 (빌드 타임 고정 방지)
   const API_BASE_URL = getApiBaseUrl();
   
-  // URL 생성
+  // URL 생성 (통합 배포: 브라우저는 상대 경로, 서버는 절대 경로)
   let url: string;
   if (endpoint.startsWith("http")) {
-    // 절대 URL이면 그대로 사용
     url = endpoint;
+  } else if (API_BASE_URL) {
+    url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
   } else {
-    // 상대 경로인 경우
-    if (API_BASE_URL) {
-      // API_BASE_URL이 있으면 붙여서 사용 (외부 배포 시 백엔드 URL)
-      url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
-    } else {
-      // API_BASE_URL이 비어있으면 상대 경로 그대로 사용 (Next.js API Routes 프록시)
-      // 브라우저 환경에서는 /api/...로 시작하는 경로가 Next.js API Routes로 자동 라우팅됨
-      url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-    }
+    url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
   }
 
   try {
@@ -225,22 +208,16 @@ export async function apiUpload<T>(
   formData: FormData,
   options?: RequestInit
 ): Promise<T> {
-  // 런타임에 API_BASE_URL 결정 (빌드 타임 고정 방지)
   const API_BASE_URL = getApiBaseUrl();
   
-  // URL 생성 (apiFetch와 동일한 로직)
+  // URL 생성 (통합 배포: 브라우저는 상대 경로, 서버는 절대 경로)
   let url: string;
   if (endpoint.startsWith("http")) {
     url = endpoint;
+  } else if (API_BASE_URL) {
+    url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
   } else {
-    // 상대 경로인 경우
-    if (API_BASE_URL) {
-      // API_BASE_URL이 있으면 붙여서 사용 (외부 배포 시 백엔드 URL)
-      url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
-    } else {
-      // API_BASE_URL이 비어있으면 상대 경로 그대로 사용 (Next.js API Routes 프록시)
-      url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-    }
+    url = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
   }
 
   try {
