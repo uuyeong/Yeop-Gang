@@ -175,7 +175,7 @@ export default function YeopgangHeader() {
                   <Link href="/">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src="/image/YeopGang_Logo.png"
+                      src="/image/Yeopgang_Logo.png"
                       alt="옆강"
                       className="h-8 w-auto"
                     />
@@ -268,7 +268,7 @@ export default function YeopgangHeader() {
                 <Link href="/">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src="/image/YeopGang_Logo.png"
+                    src="/image/Yeopgang_Logo.png"
                     alt="옆강"
                     className="h-10 w-auto"
                   />
