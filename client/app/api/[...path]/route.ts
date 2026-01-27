@@ -92,19 +92,12 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
       
       try {
         console.log(`[API Proxy] 백엔드로 요청 전송: ${request.method} ${backendUrl}`);
-        const fetchOptions: RequestInit = {
+        const response = await fetch(backendUrl, {
           method: request.method,
           headers,
           body: canHaveBody ? body : undefined,
           signal: controller.signal,
-        };
-        
-        // GET/HEAD 요청이 아닌 경우에만 body 추가
-        if (!isGetOrHead && body !== undefined) {
-          fetchOptions.body = body;
-        }
-        
-        const response = await fetch(backendUrl, fetchOptions);
+        });
         
         clearTimeout(timeoutId);
         console.log(`[API Proxy] 백엔드 응답: ${response.status} ${response.statusText}`);
