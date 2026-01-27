@@ -9,9 +9,12 @@
 - [RAG 파이프라인](#rag-파이프라인)
 - [페르소나 추출 시스템](#페르소나-추출-시스템)
 - [멀티모달 처리](#멀티모달-처리)
+- [입시 정보 통합](#입시-정보-통합)
+- [강의명/회차 구분 시스템](#강의명회차-구분-시스템)
 - [보안 및 가드레일](#보안-및-가드레일)
 - [성능 최적화](#성능-최적화)
 - [데이터베이스 설계](#데이터베이스-설계)
+- [배포 아키텍처](#배포-아키텍처)
 
 ## 시스템 아키텍처 개요
 
@@ -73,6 +76,7 @@
   - 비디오 플레이어 + 챗봇 통합 인터페이스
   - 타임라인 점프 기능
   - 요약노트 및 퀴즈 표시
+  - API 프록시 (통합 배포 시 백엔드로 요청 전달)
 
 #### 2. API Layer (Backend B)
 - **역할**: 요청 처리, 인증, 권한 관리, 보안
@@ -87,9 +91,10 @@
 - **역할**: AI 기능 구현 및 파이프라인 관리
 - **주요 기능**:
   - STT (Speech-to-Text)
-  - 페르소나 추출 (Style Analyzer)
+  - 페르소나 추출 (Style Analyzer, 강의 목록 단위)
   - RAG 파이프라인 (검색 + 생성)
   - 멀티모달 처리 (PDF 이미지/도표)
+  - 입시 정보 통합 (RAG 기반)
 
 #### 4. Data Layer
 - **SQLite**: 메타데이터, 사용자 정보, 강의 정보
@@ -124,8 +129,9 @@
     │
     ├─→ [Backend A] analyze_instructor_style() → 페르소나 추출
     │       │
-    │       └─→ 초반 5분 스크립트 분석
+    │       └─→ 초반 10~20분 스크립트 분석
     │           └─→ JSON: {tone, philosophy, signature_keywords}
+    │           └─→ 부모 강의의 persona_profile에 저장 (챕터는 재사용)
     │
     └─→ [Backend A] pipeline.ingest_texts() → 벡터 DB 저장
             │
@@ -164,6 +170,9 @@
     │
     ├─→ 질문 타입 분석 (일반 질문 vs PDF 특정 질문)
     │
+    ├─→ 입시 관련 키워드 감지 (입시, 수능, 대학 등)
+    │   └─→ 입시 컬렉션 별도 검색 (있는 경우)
+    │
     ├─→ 페이지 번호 추출 (있는 경우)
     │
     ├─→ 벡터 검색 (ChromaDB)
@@ -171,12 +180,15 @@
     │   ├─→ 페이지 번호가 있으면 직접 검색 (collection.get())
     │   └─→ 없으면 유사도 검색 (collection.query())
     │
+    ├─→ 강의명/회차 정보 로드 (부모 강의명, 챕터 번호)
+    │
     ├─→ 컨텍스트 구성
     │   │
-    │   ├─→ 검색된 문서들
-    │   ├─→ 페르소나 프롬프트
-    │   ├─→ 강사/강의 정보
-    │   └─→ 시스템 프롬프트 (보안 규칙, Grounding 규칙)
+    │       ├─→ 검색된 문서들 (강의 컨텍스트 + 입시 컨텍스트)
+    │   ├─→ 페르소나 프롬프트 (부모 강의에서 로드)
+    │   ├─→ 강사/강의 정보 (DB에서 동적 로드)
+    │   ├─→ 강의명/회차 정보 (부모 강의명, 챕터 번호)
+    │   └─→ 시스템 프롬프트 (보안 규칙, Grounding 규칙, 반복 표현 지양)
     │
     └─→ LLM 호출 (GPT-4o)
         │
@@ -262,7 +274,7 @@
 │  1. STT/SMI 세그먼트 입력                                │
 │     │                                                    │
 │     ▼                                                    │
-│  2. 초반 5분 분량 추출                                  │
+│  2. 초반 10~20분 분량 추출                              │
 │     │                                                    │
 │     ▼                                                    │
 │  3. LLM 분석 (GPT-4o)                                   │
@@ -294,12 +306,14 @@
   - 챕터 업로드 시 부모 강의의 `persona_profile` 확인
   - 있으면 재사용 (API 호출 생략)
   - 없으면 새로 분석 후 부모 강의에 저장
+- **분석 시간**: 초반 10~20분 분량의 스크립트를 분석하여 더 정확한 페르소나 추출
 
 ### 페르소나 적용 범위
 
 - **챗봇 답변**: 모든 답변에 페르소나 적용
 - **인사말**: 초기 인사말도 페르소나 기반 생성
 - **오류 메시지**: 거절 메시지, 오류 메시지도 페르소나 적용
+- **반복 표현 지양**: 동일한 문구("질문해 주세요" 등)를 반복하지 않고 다양한 표현 사용
 - **요약/퀴즈**: 과목 특성 반영 (페르소나와 별개)
 
 ## 멀티모달 처리
@@ -396,6 +410,7 @@
 3. **컨텍스트 외 질문 처리**:
    - 강의와 완전히 무관한 질문 차단
    - 단, 강의 내용과 관련된 수능 질문은 허용
+   - 입시 관련 질문은 별도 컬렉션에서 검색하여 답변 가능
 
 4. **페르소나 적용 거절 메시지**:
    - 모든 거절 메시지도 강사 말투로 생성
@@ -433,6 +448,11 @@
 - **TTL**: 무제한 (파일 해시 기반)
 - **키**: 이미지 파일 해시
 - **효과**: 동일 이미지의 재설명 생성 방지
+
+#### 6. 요약/퀴즈 생성 최적화
+- **전사 텍스트 길이 제한**: 요약노트 15,000자, 퀴즈 12,000자로 제한
+- **응답 길이 제한**: 요약노트 `max_tokens=3000`, 퀴즈 `max_tokens=2000`
+- **효과**: 긴 전사 텍스트 처리 시간 단축, 응답 생성 속도 개선
 
 ### 배치 처리
 
@@ -474,13 +494,18 @@ CREATE TABLE course (
     id TEXT PRIMARY KEY,
     instructor_id TEXT,
     title TEXT,
-    category TEXT,
+    category TEXT,  -- 과목 (필수, 예: "영어", "수학")
     status TEXT,  -- processing, completed, failed
     progress INTEGER,  -- 0-100
     persona_profile TEXT,  -- JSON 문자열 (부모 강의 페르소나)
     parent_course_id TEXT,  -- 챕터인 경우 부모 강의 ID
+    chapter_number INTEGER,  -- 챕터 번호 (1, 2, 3...)
+    total_chapters INTEGER,  -- 전체 강의 수 (부모 강의에만 사용)
+    is_public BOOLEAN,  -- 학생에게 공개 여부
     created_at TIMESTAMP,
-    FOREIGN KEY (instructor_id) REFERENCES instructor(id)
+    updated_at TIMESTAMP,
+    FOREIGN KEY (instructor_id) REFERENCES instructor(id),
+    FOREIGN KEY (parent_course_id) REFERENCES course(id)
 );
 ```
 
@@ -523,22 +548,36 @@ CREATE TABLE courseenrollment (
 ### ChromaDB 스키마
 
 #### Collection 구조
+
+##### 1. 강의 컨텍스트 컬렉션 (`yeopgang-embeddings`)
 - **이름**: `yeopgang-embeddings` (또는 설정값)
 - **임베딩 차원**: 1536 (text-embedding-3-small)
 - **메타데이터 필드**:
   - `course_id`: 강의 식별자 (필수)
   - `instructor_id`: 강사 식별자
   - `segment_index`: STT 세그먼트 인덱스
-  - `page_number`: PDF 페이지 번호
-  - `type`: 문서 타입 (transcript, pdf, persona)
+  - `page_number`: PDF 페이지 번호 (정수)
+  - `type`: 문서 타입 (subtitle_segment, video_segment, audio_segment, pdf_page, persona)
   - `start_time`: 세그먼트 시작 시간 (초)
   - `end_time`: 세그먼트 종료 시간 (초)
+  - `source`: 원본 파일명
+
+##### 2. 입시 정보 컬렉션 (`admission_global`)
+- **이름**: `admission_global`
+- **임베딩 차원**: 1536 (text-embedding-3-small)
+- **메타데이터 필드**:
+  - `course_id`: `"admission_global"` (전역 데이터 식별자)
+  - `type`: `"admission_info"`
+  - `source`: 출처 (예: "수만휘 게시판")
+  - `title`: 게시글 제목
+  - `index`: 고유 인덱스
 
 #### 문서 ID 형식
 - STT 세그먼트: `{course_id}-seg-{segment_index}`
 - PDF 페이지: `{course_id}-page-{page_number}`
 - 페르소나: `{course_id}-persona`
-- 기타: `{course_id}-doc-{i}-{timestamp}`
+- 입시 정보: `{course_id}-admission-{index}`
+- 기타: `{course_id}-doc-{i}-{timestamp}` (타임스탬프 포함으로 중복 방지)
 
 ### 데이터 격리 (Multi-tenancy)
 

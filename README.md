@@ -35,10 +35,32 @@
 - **멀티모달 처리**: 비디오, 오디오, PDF 교재, SMI 자막 파일을 통합하여 강의 컨텍스트를 완벽하게 이해
 - **실시간 타임라인 연동**: 챗봇 답변 내 타임스탬프를 클릭하면 해당 강의 구간으로 바로 이동
 - **과목 특화 기능**: 수학, 영어, 과학 등 과목별 특성에 맞춘 요약노트와 퀴즈 생성
+- **입시 정보 통합**: 수만휘 게시판 크롤링 데이터를 통합하여 입시 관련 질문에도 답변 가능
 
 ## 배포
 
-배포 관련 내용은 추후 추가 예정입니다.
+옆강은 **Render**를 사용하여 통합 배포됩니다.
+
+### 🚀 배포 주소
+
+**프로덕션**: `https://yeop-gang.onrender.com`
+
+### 배포 구조
+
+- **통합 배포**: 하나의 Docker 컨테이너에 프론트엔드(Next.js)와 백엔드(FastAPI)를 함께 배포
+- **API 프록시**: Next.js API Routes를 통해 `/api/*` 요청을 내부 백엔드(`localhost:8000`)로 프록시
+- **포트 관리**: Render는 프론트엔드 포트(3000)만 외부에 노출, 백엔드는 내부 통신만 사용
+
+### 배포 방법
+
+상세한 배포 가이드는 [DEPLOYMENT.md](./DEPLOYMENT.md)를 참고하세요.
+
+**요약:**
+1. Render 대시보드에서 Web Service 생성
+2. GitHub 저장소 연결
+3. Dockerfile 기반 빌드 설정
+4. 환경 변수 설정 (OPENAI_API_KEY 등)
+5. 배포 완료
 
 ## 주요 기능
 
@@ -50,22 +72,32 @@
 - **요약노트**: 강의 내용 자동 요약 및 주요 포인트 추출 (과목별 특화, 표 형식 지원)
 - **퀴즈**: 5문제 객관식 퀴즈 자동 생성, 답변 선택, 자동 채점 및 점수 표시 (과목별 특화)
 - **강의 등록**: 원하는 강의를 등록하여 학습
+- **강의 검색**: 과목별, 강사별 강의 검색 및 필터링
+- **입시 정보 질문**: 수만휘 게시판 데이터를 활용한 입시 관련 질문 답변
 
 ### 👨‍🏫 강사용 기능
 
 - **강의 업로드**: 비디오(MP4), 오디오(MP3), PDF 교재, SMI 자막 파일 업로드
+- **강의 목록 관리**: 강의 목록 생성, 챕터 추가, 정보 수정, 삭제
 - **처리 상태 확인**: 실시간 진행률 표시 (STT, 페르소나 분석, 벡터 DB 저장 등)
-- **강의 관리**: 강의 목록 조회, 정보 수정, 삭제
-- **프로필 관리**: 강사 프로필 정보 조회 및 수정
+- **프로필 관리**: 강사 프로필 정보 조회 및 수정 (이름, 소개, 전문 분야, 프로필 이미지)
 
 ### 🤖 AI 기능
 
 - **자동 STT (Speech-to-Text)**: OpenAI Whisper API를 사용한 음성 전사
-- **페르소나 추출**: 강사 스타일 자동 분석 (말투, 교육 철학, 특징 표현)
+- **페르소나 추출**: 강사 스타일 자동 분석 (말투, 교육 철학, 특징 표현) - 강의 목록 단위 관리
 - **RAG (Retrieval-Augmented Generation)**: ChromaDB 벡터 검색 + GPT-4o 기반 답변 생성
 - **멀티모달 처리**: PDF 이미지/도표 VLM 기반 설명 생성
 - **맞춤법 검사**: 한국어 맞춤법 자동 교정 (py-hanspell)
 - **가드레일**: 프롬프트 인젝션 방어, 부적절한 질문 필터링
+- **입시 정보 통합**: 수만휘 게시판 크롤링 데이터를 별도 ChromaDB 컬렉션에 저장하여 입시 관련 질문 답변
+
+### 🎯 특화 기능
+
+- **강의명/회차 구분**: 부모 강의명과 챕터 번호를 명확히 구분하여 인식
+- **반복 표현 지양**: 챗봇이 동일한 문구를 반복하지 않고 다양한 표현 사용
+- **수학 공식 렌더링**: LaTeX 문법을 읽기 쉬운 일반 텍스트로 변환 (예: `y^2 = 4px`, `√2`, `a/b`)
+- **성능 최적화**: 캐싱, 배치 처리, 파일 해시 기반 재사용으로 API 호출 최소화
 
 ## 기술 스택
 
@@ -74,22 +106,31 @@
 - **프레임워크**: FastAPI 0.115.0
 - **데이터베이스**: 
   - SQLite (메타데이터, 사용자 정보)
-  - ChromaDB (벡터 임베딩 저장)
+  - ChromaDB 0.5.11 (벡터 임베딩 저장)
 - **AI/ML**:
-  - OpenAI API (GPT-4o, Whisper, Embeddings, VLM)
+  - OpenAI API (GPT-4o-mini, Whisper, Embeddings, VLM)
   - LangChain 0.3.7
-  - Sentence Transformers
+  - Sentence Transformers 3.2.1
 - **인증**: JWT (python-jose, passlib[bcrypt])
 - **기타**: 
-  - PyMuPDF (PDF 처리)
-  - py-hanspell (맞춤법 검사)
+  - PyMuPDF 1.24.0 (PDF 처리)
+  - py-hanspell (맞춤법 검사, 선택적)
+  - tiktoken 0.7.0 (토큰 계산)
+  - markdown 3.10 (마크다운 변환)
 
 ### Frontend
 
 - **프레임워크**: Next.js 14.2.18
 - **언어**: TypeScript 5.6.3
 - **스타일링**: Tailwind CSS 3.4.13
-- **마크다운**: marked, DOMPurify
+- **마크다운**: marked 17.0.1, DOMPurify 3.3.1
+- **아이콘**: lucide-react 0.263.1
+
+### 배포
+
+- **플랫폼**: Render (Free Tier)
+- **컨테이너**: Docker
+- **통합 배포**: Next.js + FastAPI 단일 컨테이너
 
 ## 빠른 시작
 
@@ -99,6 +140,7 @@
 - Node.js 18+ (권장)
 - ffmpeg (STT 사용 시)
 - OpenAI API Key
+- Docker (배포 시)
 
 ### Backend 설정
 
@@ -135,13 +177,35 @@ cd client
 # 2. 의존성 설치
 npm install
 
-# 3. 개발 서버 실행
+# 3. 환경 변수 설정
+# .env.local 파일 생성 (선택적, 개발 환경에서만)
+# NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# 4. 개발 서버 실행
 npm run dev
 ```
 
 **확인 사항:**
 - http://localhost:3000 접속 시 프론트엔드 화면 확인
 - 백엔드 서버가 실행 중인지 확인
+
+### Docker로 통합 실행
+
+```bash
+# 1. Docker 이미지 빌드
+docker build -t yeopgang-app .
+
+# 2. 컨테이너 실행
+docker run -p 3000:3000 \
+  -e OPENAI_API_KEY=your_key \
+  -e DATABASE_URL=sqlite:///./server/data/yeopgang.db \
+  -v $(pwd)/server/data:/app/server/data \
+  yeopgang-app
+
+# 3. 접속
+# 프론트엔드: http://localhost:3000
+# 백엔드 API (내부): http://localhost:8000
+```
 
 ## 환경 변수
 
@@ -154,8 +218,9 @@ npm run dev
 OPENAI_API_KEY=your-openai-key-here
 
 # 데이터베이스
-DATABASE_URL=sqlite:///./data/yeopgang.db
-CHROMA_DB_PATH=./data/chroma
+DATABASE_URL=sqlite:///./server/data/yeopgang.db
+DATA_ROOT=server/data
+CHROMA_DB_PATH=server/data/chroma
 
 # AI 모델 설정
 LLM_MODEL=gpt-4o-mini  # 또는 gpt-4o
@@ -164,7 +229,7 @@ EMBEDDING_MODEL=text-embedding-3-small
 # 인증
 JWT_SECRET=your-secret-key-change-in-production
 
-# 서버 설정
+# 서버 설정 (로컬 개발 시)
 FRONTEND_URL=http://localhost:3000
 BACKEND_URL=http://localhost:8000
 ```
@@ -179,6 +244,7 @@ GOOGLE_API_KEY=your-google-key-here
 **참고:**
 - `.env` 파일은 `.gitignore`에 포함되어 커밋되지 않습니다
 - 설정은 `dataclass` + `os.getenv`로 로드되며, `.env` 파일 읽기 실패 시 환경 변수에서 읽습니다
+- Render 배포 시 환경 변수는 Render 대시보드에서 설정합니다
 
 ## 프로젝트 구조
 
@@ -194,7 +260,8 @@ Yeop-Gang/
 │   │   │   ├── embeddings.py  # 텍스트 임베딩
 │   │   │   ├── vectorstore.py # ChromaDB 관리
 │   │   │   ├── pdf.py         # PDF 처리 (텍스트 + 이미지)
-│   │   │   └── smi_parser.py  # SMI 자막 파싱
+│   │   │   ├── smi_parser.py  # SMI 자막 파싱
+│   │   │   └── admission_data.py  # 입시 정보 로더
 │   │   ├── style_analyzer.py  # 강사 스타일 분석
 │   │   └── config.py      # AI 설정
 │   ├── api/               # API 엔드포인트 (Backend B)
@@ -215,12 +282,16 @@ Yeop-Gang/
 │   └── requirements.txt   # Python 의존성
 ├── client/                # 프론트엔드
 │   ├── app/               # Next.js App Router
+│   │   ├── api/           # API 프록시 (통합 배포용)
+│   │   │   └── [...path]/route.ts  # 백엔드 프록시
 │   │   ├── instructor/    # 강사용 페이지
 │   │   │   ├── courses/   # 강의 목록/관리
 │   │   │   └── upload/    # 강의 업로드
 │   │   ├── student/       # 학생용 페이지
 │   │   │   ├── courses/   # 등록한 강의 목록
 │   │   │   └── play/      # 강의 시청 + 챗봇
+│   │   ├── mypage/        # 마이페이지
+│   │   ├── search/        # 강의 검색
 │   │   └── layout.tsx     # 레이아웃
 │   ├── components/        # 재사용 컴포넌트
 │   │   ├── VideoPlayer.tsx    # 비디오 플레이어
@@ -228,6 +299,7 @@ Yeop-Gang/
 │   │   ├── SummaryNote.tsx    # 요약노트
 │   │   ├── Quiz.tsx           # 퀴즈
 │   │   ├── UploadForm.tsx     # 업로드 폼
+│   │   ├── Header.tsx         # 헤더
 │   │   └── ...
 │   ├── lib/               # 유틸리티
 │   │   ├── api.ts         # API 클라이언트
@@ -239,8 +311,14 @@ Yeop-Gang/
 │   ├── chroma/           # ChromaDB 벡터 저장소
 │   └── uploads/          # 업로드된 파일
 ├── ref/                   # 테스트 데이터
+│   ├── testcourse1/      # 테스트 강의 1
+│   ├── testcourse2/      # 테스트 강의 2
+│   └── 크롤링/            # 입시 정보 크롤링 데이터 (Git 무시)
+├── Dockerfile            # Docker 빌드 파일
+├── start.sh              # 통합 실행 스크립트
 ├── README.md             # 이 파일
 ├── ARCHITECTURE.md        # 아키텍처 상세 문서
+├── DEPLOYMENT.md          # 배포 가이드
 ├── COLLABORATION_GUIDE.md # 협업 가이드
 └── API_README.md         # API 사용 가이드
 ```
@@ -300,18 +378,20 @@ Yeop-Gang/
 - 시스템 아키텍처 개요
 - 데이터 흐름 (업로드 → 처리 → 채팅)
 - RAG 파이프라인 상세
-- 페르소나 추출 알고리즘
+- 페르소나 추출 알고리즘 (강의 목록 단위 관리)
 - 멀티모달 처리 (PDF 이미지/도표)
+- 입시 정보 통합 (RAG 기반)
 - 보안 및 가드레일
-- 성능 최적화 (캐싱, 배치 처리)
+- 성능 최적화 (캐싱, 배치 처리, 파일 해시 기반 재사용)
+- 배포 아키텍처 (Render 통합 배포)
 
 ## 기여 가이드
 
 ### 팀원 역할 분담 (R&R)
 
-- **`server/ai` (Backend A)**: RAG 파이프라인, Whisper STT, 페르소나 추출, 멀티모달 처리
-- **`server/api`, `server/core` (Backend B)**: 비동기 Task 관리, 멀티 테넌트 DB, API 엔드포인트, 보안
-- **`client` (Frontend)**: 강사/학생 이원화 UI, 타임라인 연동, 동적 테마
+- **`server/ai` (Backend A)**: RAG 파이프라인, Whisper STT, 페르소나 추출, 멀티모달 처리, 입시 정보 통합
+- **`server/api`, `server/core` (Backend B)**: 비동기 Task 관리, 멀티 테넌트 DB, API 엔드포인트, 보안, 배포
+- **`client` (Frontend)**: 강사/학생 이원화 UI, 타임라인 연동, API 프록시, 동적 테마
 
 📖 **상세 협업 가이드**: [COLLABORATION_GUIDE.md](./COLLABORATION_GUIDE.md) 참고
 
