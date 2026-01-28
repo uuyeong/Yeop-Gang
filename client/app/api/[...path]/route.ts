@@ -49,6 +49,27 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   const path = pathSegments.join('/');
   console.log(`[API Proxy] ${request.method} /api/${path} → ${BACKEND_URL}/api/${path}`);
   
+  // GET/HEAD 요청은 body를 포함하면 안 됨
+  const method = request.method.toUpperCase();
+  const canHaveBody = !['GET', 'HEAD'].includes(method);
+  
+  // 요청 본문 가져오기 (GET/HEAD가 아닌 경우에만, 루프 밖에서 한 번만 읽기)
+  let body: BodyInit | undefined;
+  let isMultipart = false;
+  if (canHaveBody) {
+    const contentType = request.headers.get('content-type');
+    
+    if (contentType?.includes('multipart/form-data')) {
+      body = await request.formData();
+      isMultipart = true;
+    } else if (contentType?.includes('application/json')) {
+      body = await request.text();
+    } else {
+      const text = await request.text();
+      body = text || undefined;
+    }
+  }
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const url = new URL(request.url);
@@ -58,33 +79,30 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
       const backendUrl = `${BACKEND_URL}/api/${path}${queryString}`;
       console.log(`[API Proxy] 시도 ${attempt}/${maxRetries}: ${backendUrl}`);
       
-      // GET/HEAD 요청은 body를 포함하면 안 됨
-      const method = request.method.toUpperCase();
-      const canHaveBody = !['GET', 'HEAD'].includes(method);
-      
-      // 요청 본문 가져오기 (GET/HEAD가 아닌 경우에만)
-      let body: BodyInit | undefined;
-      if (canHaveBody) {
-        const contentType = request.headers.get('content-type');
-        
-        if (contentType?.includes('multipart/form-data')) {
-          body = await request.formData();
-        } else if (contentType?.includes('application/json')) {
-          body = await request.text();
-        } else {
-          const text = await request.text();
-          body = text || undefined;
-        }
-      }
-      
-      // 헤더 복사 (호스트 헤더 제외)
+      // 헤더 복사 (호스트 헤더 제외, multipart인 경우 Content-Type과 Content-Length도 제외)
       const headers = new Headers();
       request.headers.forEach((value, key) => {
         const lowerKey = key.toLowerCase();
-        if (lowerKey !== 'host' && lowerKey !== 'connection') {
-          headers.set(key, value);
+        // multipart/form-data인 경우 Content-Type과 Content-Length 헤더를 제거
+        // (FormData를 전달하면 브라우저가 자동으로 올바른 boundary와 함께 Content-Type을 설정함)
+        if (lowerKey === 'host' || lowerKey === 'connection' || 
+            (isMultipart && (lowerKey === 'content-type' || lowerKey === 'content-length'))) {
+          return;
         }
+        headers.set(key, value);
       });
+      
+      // multipart 요청은 재시도 불가능하므로 첫 번째 시도만 허용
+      if (isMultipart && attempt > 1) {
+        console.error('[API Proxy] multipart 요청은 재시도할 수 없습니다 (body가 이미 읽혔습니다)');
+        return NextResponse.json(
+          { 
+            error: '파일 업로드 요청 실패', 
+            message: lastError?.message || 'Unknown error'
+          },
+          { status: 503 }
+        );
+      }
       
       // 백엔드로 요청 전달 (타임아웃 설정)
       const controller = new AbortController();
@@ -164,11 +182,23 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
         name: error instanceof Error ? error.name : 'Unknown',
       });
       
-      // ECONNREFUSED 오류인 경우 재시도
+      // multipart 요청은 재시도 불가능 (body가 이미 읽혔음)
+      if (isMultipart) {
+        console.error('[API Proxy] multipart 요청 실패 - 재시도 불가능');
+        return NextResponse.json(
+          { 
+            error: '파일 업로드 요청 실패', 
+            message: errorMessage,
+            backendUrl: `${BACKEND_URL}/api/${pathSegments.join('/')}`,
+          },
+          { status: 503 }
+        );
+      }
+      
+      // ECONNREFUSED 오류인 경우 재시도 (multipart가 아닌 경우만)
       if (error instanceof Error && 
           (errorMessage.includes('ECONNREFUSED') || 
-           errorMessage.includes('fetch failed') ||
-           errorMessage.includes('ECONNREFUSED'))) {
+           errorMessage.includes('fetch failed'))) {
         if (attempt < maxRetries) {
           const waitTime = attempt * 1000; // 1초, 2초, 3초 대기
           console.warn(`[API Proxy] 백엔드 연결 실패 (시도 ${attempt}/${maxRetries}), ${waitTime}ms 후 재시도...`);
