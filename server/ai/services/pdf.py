@@ -7,6 +7,7 @@ import io
 import base64
 import hashlib
 import time
+import sys
 from collections import OrderedDict
 
 from ai.config import AISettings
@@ -32,6 +33,22 @@ _IMAGE_DESC_CACHE_TTL_SECONDS = 3600
 _IMAGE_DESC_CACHE_MAX = 512
 _MAX_IMAGES_PER_PAGE = 6
 _MAX_IMAGES_TOTAL = 50
+
+
+# MuPDF 에러 메시지 필터링을 위한 stderr 래퍼
+class MuPDFErrorFilter:
+    """MuPDF 에러 메시지를 필터링하는 stderr 래퍼"""
+    def __init__(self, original_stderr):
+        self.original_stderr = original_stderr
+    
+    def write(self, text):
+        # MuPDF 관련 에러 메시지 필터링
+        if "MuPDF error" in text or "syntax error: invalid key in dict" in text:
+            return  # 무시
+        self.original_stderr.write(text)
+    
+    def flush(self):
+        self.original_stderr.flush()
 
 
 def _image_cache_get(key: str) -> Optional[str]:
@@ -94,12 +111,22 @@ def describe_image_with_vision(
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     
     prompt = (
-        f"이 이미지는 강의 자료의 PDF에서 추출된 도표, 그래프, 또는 그림입니다. "
-        f"이미지의 내용을 자세히 설명해주세요. 특히:\n"
-        f"- 도표/그래프인 경우: 축 레이블, 데이터 값, 범례, 트렌드\n"
-        f"- 그림/다이어그램인 경우: 요소들 간의 관계, 주요 특징\n"
-        f"- 수식이나 텍스트가 있는 경우: 그 내용\n"
-        f"한국어로 상세하고 정확하게 설명해주세요. 이 이미지는 PDF의 {page_num} 페이지에서 추출되었습니다."
+        f"이 이미지는 강의 자료의 PDF에서 추출된 도표, 그래프, 그림, 다이어그램, 또는 텍스트가 포함된 이미지입니다. "
+        f"이미지의 모든 요소를 자세히 분석하고 설명해주세요.\n\n"
+        f"**절대 지켜야 할 규칙 - 숫자·기호 절대 누락 금지**:\n"
+        f"- 이미지에 보이는 모든 숫자(0-9)를 하나도 빠뜨리지 말고 정확히 읽어주세요.\n"
+        f"- 수식이나 공식에 있는 모든 숫자, 계수, 상수를 정확히 기록하세요. 예: '2x'에서 2를 빼먹으면 안 됩니다.\n"
+        f"- 모든 수학 기호(+, -, ×, ÷, =, <, >, ≤, ≥, ≠, √, ^, 등)를 정확히 읽어주세요.\n"
+        f"- 변수나 문자(x, y, z, a, b, c 등)도 모두 읽어주세요.\n"
+        f"- 지수나 제곱 표시(예: x², y³)도 정확히 읽어주세요.\n"
+        f"- 분수나 비율 표시도 정확히 읽어주세요 (예: 1/2, 3/4).\n"
+        f"- 레이블, 축 이름, 범례의 모든 텍스트와 숫자를 읽어주세요.\n"
+        f"- 추상적인 요약보다는, 보이는 숫자와 기호를 그대로 정확히 기술하는 것이 중요합니다.\n\n"
+        f"**설명 항목**:\n"
+        f"- 도형/그래프인 경우: 모양, 선분, 각도, 좌표, 수식, 레이블, 축, 데이터 값, 범례 등\n"
+        f"- 그림/다이어그램인 경우: 요소들 간의 관계, 주요 특징, 구조, 흐름 등\n"
+        f"- 텍스트가 포함된 경우: 모든 텍스트 내용, 수식, 기호, 레이블을 하나도 빠뜨리지 말고 읽어주세요\n\n"
+        f"한국어로 상세하고 정확하게 설명해주세요. 특히 숫자와 기호는 절대 누락하지 마세요."
     )
     
     if context:
@@ -128,9 +155,53 @@ def describe_image_with_vision(
             max_tokens=1000,
         )
         result_text = response.choices[0].message.content
+        
+        # 응답 검증: 이상한 응답이 오면 재시도
+        if result_text and ("죄송하지만" in result_text or "직접 분석" in result_text or "불가능합니다" in result_text or "식별하는 것은 불가능" in result_text):
+            print(f"⚠️ Vision API 응답이 이상합니다. 재시도 중... (페이지 {page_num})")
+            # 프롬프트를 더 명확하게 수정하여 재시도
+            retry_prompt = (
+                f"이 이미지는 강의 자료의 PDF에서 추출된 도표, 그래프, 그림, 다이어그램, 또는 텍스트가 포함된 이미지입니다. "
+                f"이미지의 모든 요소를 자세히 분석하고 설명해주세요.\n\n"
+                f"**절대 지켜야 할 규칙 - 숫자·기호 절대 누락 금지**:\n"
+                f"- 이미지에 보이는 모든 숫자(0-9)를 하나도 빠뜨리지 말고 정확히 읽어주세요.\n"
+                f"- 수식이나 공식에 있는 모든 숫자, 계수, 상수를 정확히 기록하세요. 예: '2x'에서 2를 빼먹으면 안 됩니다.\n"
+                f"- 모든 수학 기호(+, -, ×, ÷, =, <, >, ≤, ≥, ≠, √, ^, 등)를 정확히 읽어주세요.\n"
+                f"- 변수나 문자(x, y, z, a, b, c 등)도 모두 읽어주세요.\n"
+                f"- 지수나 제곱 표시(예: x², y³)도 정확히 읽어주세요.\n"
+                f"- 분수나 비율 표시도 정확히 읽어주세요 (예: 1/2, 3/4).\n"
+                f"- 레이블, 축 이름, 범례의 모든 텍스트와 숫자를 읽어주세요.\n"
+                f"- 추상적인 요약보다는, 보이는 숫자와 기호를 그대로 정확히 기술하는 것이 중요합니다.\n\n"
+                f"**설명 항목**:\n"
+                f"- 도형/그래프인 경우: 모양, 선분, 각도, 좌표, 수식, 레이블, 축, 데이터 값, 범례 등\n"
+                f"- 그림/다이어그램인 경우: 요소들 간의 관계, 주요 특징, 구조, 흐름 등\n"
+                f"- 텍스트가 포함된 경우: 모든 텍스트 내용, 수식, 기호, 레이블을 하나도 빠뜨리지 말고 읽어주세요\n\n"
+                f"이미지를 직접 보고 분석하여 상세히 설명해주세요. 특히 숫자와 기호는 절대 누락하지 마세요."
+            )
+            if context:
+                retry_prompt += f"\n\n참고 컨텍스트: {context[:500]}"
+            
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": retry_prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                            ],
+                        }
+                    ],
+                    max_tokens=1000,
+                )
+                result_text = response.choices[0].message.content
+            except Exception as retry_error:
+                print(f"⚠️ Vision API 재시도 실패 (페이지 {page_num}): {retry_error}")
+        
         if result_text:
             _image_cache_set(image_hash, result_text)
-        return result_text
+        return result_text or f"이미지 설명 생성 실패 (페이지 {page_num})"
     except Exception as e:
         print(f"Error describing image with Vision API (page {page_num}): {e}")
         return f"이미지 설명 생성 오류 (페이지 {page_num}): {str(e)}"
@@ -161,24 +232,28 @@ def extract_pdf_content(
     all_texts: List[str] = []
     all_metadata: List[Dict[str, Any]] = []
     
+    # MuPDF 에러 필터링 활성화
+    original_stderr = sys.stderr
+    sys.stderr = MuPDFErrorFilter(original_stderr)
+    
     try:
         total_image_count = 0
         for page_num in range(len(doc)):
             try:
-            page = doc[page_num]
-            
+                page = doc[page_num]
+                
                 # 1. 텍스트 추출 (오류 발생 시 빈 문자열로 처리)
                 try:
-            page_text = page.get_text("text").strip()
+                    page_text = page.get_text("text").strip()
                 except Exception as e:
                     print(f"⚠️ 텍스트 추출 오류 (페이지 {page_num + 1}): {e}")
                     page_text = ""  # 텍스트 추출 실패 시 빈 문자열
-            
-            # 2. 이미지 추출 (선택적)
-            image_descriptions: List[str] = []
-            if extract_images:
+                
+                # 2. 이미지 추출 (선택적)
+                image_descriptions: List[str] = []
+                if extract_images:
                     try:
-                image_list = page.get_images(full=True)
+                        image_list = page.get_images(full=True)
                         print(f"📄 페이지 {page_num + 1}: 이미지 {len(image_list)}개 발견")
                         if len(image_list) > _MAX_IMAGES_PER_PAGE:
                             print(f"⚠️ 페이지 {page_num + 1}: 이미지 {len(image_list)}개 중 {_MAX_IMAGES_PER_PAGE}개만 처리")
@@ -186,54 +261,54 @@ def extract_pdf_content(
                     except Exception as e:
                         print(f"⚠️ 이미지 목록 추출 오류 (페이지 {page_num + 1}): {e}")
                         image_list = []  # 이미지 목록 추출 실패 시 빈 리스트
-                
-                # 이미지 주변 텍스트를 컨텍스트로 사용
-                context_text = page_text[:1000] if page_text else ""  # 간단한 컨텍스트
-                
+                    
+                    # 이미지 주변 텍스트를 컨텍스트로 사용
+                    context_text = page_text[:1000] if page_text else ""  # 간단한 컨텍스트
+                    
                     if len(image_list) == 0:
                         print(f"📄 페이지 {page_num + 1}: 이미지가 없습니다.")
-                
-                for img_idx, img_info in enumerate(image_list):
-                    if total_image_count >= _MAX_IMAGES_TOTAL:
-                        print(f"⚠️ 이미지 설명 최대치({_MAX_IMAGES_TOTAL}) 도달, 이후 이미지 처리 생략")
-                        break
-                    try:
-                        xref = img_info[0]
-                        base_image = doc.extract_image(xref)
-                        image_bytes = base_image["image"]
-                        
-                        # 이미지 설명 생성
+                    
+                    for img_idx, img_info in enumerate(image_list):
+                        if total_image_count >= _MAX_IMAGES_TOTAL:
+                            print(f"⚠️ 이미지 설명 최대치({_MAX_IMAGES_TOTAL}) 도달, 이후 이미지 처리 생략")
+                            break
+                        try:
+                            xref = img_info[0]
+                            base_image = doc.extract_image(xref)
+                            image_bytes = base_image["image"]
+                            
+                            # 이미지 설명 생성
                             print(f"🖼️ 이미지 설명 생성 중 (페이지 {page_num + 1}, 이미지 {img_idx + 1})...")
-                        description = describe_image_with_vision(
-                            image_bytes=image_bytes,
-                            settings=settings,
-                            page_num=page_num + 1,  # 1-based 페이지 번호
-                            context=context_text,
-                        )
-                        image_descriptions.append(f"이미지/도표 설명 (페이지 {page_num + 1}-{img_idx + 1}): {description}")
+                            description = describe_image_with_vision(
+                                image_bytes=image_bytes,
+                                settings=settings,
+                                page_num=page_num + 1,  # 1-based 페이지 번호
+                                context=context_text,
+                            )
+                            image_descriptions.append(f"이미지/도표 설명 (페이지 {page_num + 1}-{img_idx + 1}): {description}")
                             print(f"✅ 이미지 설명 생성 완료 (페이지 {page_num + 1}, 이미지 {img_idx + 1}): {description[:100]}...")
-                        total_image_count += 1
-                        
-                    except Exception as e:
+                            total_image_count += 1
+                            
+                        except Exception as e:
                             print(f"⚠️ 이미지 추출 오류 (페이지 {page_num + 1}, 이미지 {img_idx + 1}): {e}")
                             continue  # 개별 이미지 오류는 건너뛰고 계속 진행
-            
-            # 3. 텍스트와 이미지 설명을 결합
-            combined_text = page_text
-            if image_descriptions:
-                combined_text += "\n\n" + "\n\n".join(image_descriptions)
+                
+                # 3. 텍스트와 이미지 설명을 결합
+                combined_text = page_text
+                if image_descriptions:
+                    combined_text += "\n\n" + "\n\n".join(image_descriptions)
                     print(f"📄 페이지 {page_num + 1}: 이미지 설명 {len(image_descriptions)}개 추가됨")
                 else:
                     if extract_images:
                         print(f"📄 페이지 {page_num + 1}: 이미지 설명 없음 (이미지가 없거나 추출 실패)")
-            
-            if combined_text.strip(): # 내용이 있는 경우만 추가
-                all_texts.append(combined_text)
-                all_metadata.append({
-                    "source": path.name,
-                    "page_number": page_num + 1,  # 1-based
-                    "type": "pdf_page",
-                })
+                
+                if combined_text.strip():  # 내용이 있는 경우만 추가
+                    all_texts.append(combined_text)
+                    all_metadata.append({
+                        "source": path.name,
+                        "page_number": page_num + 1,  # 1-based
+                        "type": "pdf_page",
+                    })
                 elif page_text.strip():  # 텍스트만 있어도 추가
                     all_texts.append(page_text)
                     all_metadata.append({
@@ -253,5 +328,7 @@ def extract_pdf_content(
         }
         
     finally:
+        # 원래 stderr 복원
+        sys.stderr = original_stderr
         doc.close()
 

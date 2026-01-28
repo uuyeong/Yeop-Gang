@@ -455,25 +455,35 @@ def process_course_assets(
                                 is_last = page_idx == total_pages - 1
                                 if batch_texts and (len(batch_texts) >= batch_size or is_last):
                                     try:
+                                        print(f"[{course_id}] 📤 PDF 배치 인제스트 시작: {len(batch_texts)}개 페이지 (course_id={course_id})")
+                                        for bm in batch_metas:
+                                            print(f"[{course_id}] 📄 배치 메타데이터: page_number={bm.get('page_number')} (type: {type(bm.get('page_number')).__name__}), type={bm.get('type')}, course_id={bm.get('course_id')}")
                                         result = pipeline.ingest_texts_with_metadatas(
                                             batch_texts,
                                             course_id=course_id,
                                             metadatas=batch_metas,
                                         )
                                         ingested_count += result.get("ingested", 0)
+                                        print(f"[{course_id}] ✅ PDF 배치 인제스트 성공: {result.get('ingested', 0)}개 저장됨")
                                     except Exception as batch_error:
                                         print(f"[{course_id}] ⚠️ PDF 배치 인제스트 오류: {batch_error}")
+                                        import traceback
+                                        print(f"[{course_id}] 배치 오류 상세: {traceback.format_exc()}")
                                         # 배치 실패 시 페이지 단위로 재시도
                                         for retry_text, retry_meta in zip(batch_texts, batch_metas):
                                             try:
+                                                print(f"[{course_id}] 🔄 PDF 페이지 재시도: page_number={retry_meta.get('page_number')}")
                                                 result = pipeline.ingest_texts(
                                                     [retry_text],
                                                     course_id=course_id,
                                                     metadata=retry_meta,
                                                 )
                                                 ingested_count += result.get("ingested", 0)
+                                                print(f"[{course_id}] ✅ PDF 페이지 재시도 성공: {result.get('ingested', 0)}개 저장됨")
                                             except Exception as retry_error:
                                                 print(f"[{course_id}] ⚠️ PDF 페이지 인제스트 재시도 오류: {retry_error}")
+                                                import traceback
+                                                print(f"[{course_id}] 재시도 오류 상세: {traceback.format_exc()}")
                                                 continue
                                     finally:
                                         batch_texts = []

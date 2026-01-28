@@ -125,12 +125,23 @@ class RAGPipeline:
             if md.get("segment_index") is not None:
                 doc_id = f"{course_id}-seg-{md['segment_index']}"
             elif md.get("page_number") is not None:
-                doc_id = f"{course_id}-page-{md['page_number']}"
+                page_num = md['page_number']
+                # page_number를 문자열로 변환하여 ID 생성 (타입 일관성)
+                doc_id = f"{course_id}-page-{page_num}"
             elif md.get("type") == "persona":
                 doc_id = f"{course_id}-persona"
             else:
-                doc_id = f"{course_id}-doc-{i}"
+                import time
+                doc_id = f"{course_id}-doc-{i}-{int(time.time())}"
             ids.append(doc_id)
+        
+        # PDF 문서인 경우 상세 로깅
+        pdf_count = sum(1 for md in fixed_metadatas if md.get("type") == "pdf_page")
+        if pdf_count > 0:
+            print(f"[RAG DEBUG] 📤 PDF 문서 {pdf_count}개 ChromaDB 저장 시작 (course_id={course_id})")
+            for i, (md, doc_id) in enumerate(zip(fixed_metadatas[:3], ids[:3])):
+                if md.get("type") == "pdf_page":
+                    print(f"[RAG DEBUG] 📄 PDF 저장: id={doc_id}, page_number={md.get('page_number')} (type: {type(md.get('page_number')).__name__}), course_id={md.get('course_id')}")
 
         try:
             self.collection.upsert(
@@ -139,6 +150,27 @@ class RAGPipeline:
                 metadatas=fixed_metadatas,
                 embeddings=embeddings,
             )
+            if pdf_count > 0:
+                print(f"[RAG DEBUG] ✅ PDF 문서 {pdf_count}개 ChromaDB 저장 완료 (course_id={course_id})")
+                # 저장 후 검증: 실제로 저장되었는지 확인
+                try:
+                    verify_result = self.collection.get(
+                        where={
+                            "$and": [
+                                {"course_id": course_id},
+                                {"type": "pdf_page"}
+                            ]
+                        },
+                        include=["metadatas"],
+                        limit=pdf_count + 1
+                    )
+                    verified_count = len(verify_result.get("ids", [])) if verify_result.get("ids") else 0
+                    print(f"[RAG DEBUG] 🔍 저장 검증: course_id={course_id}에 PDF 문서 {verified_count}개 확인됨")
+                    if verified_count > 0:
+                        sample_meta = verify_result["metadatas"][0] if verify_result.get("metadatas") else {}
+                        print(f"[RAG DEBUG] 📄 샘플 메타데이터: page_number={sample_meta.get('page_number')} (type: {type(sample_meta.get('page_number')).__name__}), course_id={sample_meta.get('course_id')}")
+                except Exception as verify_error:
+                    print(f"[RAG DEBUG] ⚠️ 저장 검증 중 오류: {verify_error}")
         except InvalidDimensionException as e:
             self._recreate_collection_on_dimension_mismatch(e)
             return {"ingested": 0, "error": "Collection recreated due to dimension mismatch. Please re-ingest."}
@@ -195,17 +227,64 @@ class RAGPipeline:
             if requested_page is not None:
                 try:
                     # ChromaDB에서 특정 페이지 번호를 가진 문서 직접 검색
-                    page_results = self.collection.get(
-                        where={
-                            "$and": [
-                                {"course_id": course_id},
-                                {"type": "pdf_page"},
-                                {"page_number": requested_page}
-                            ]
-                        },
-                        include=["documents", "metadatas"],
-                    )
-                    if page_results.get("documents") and len(page_results["documents"]) > 0:
+                    # ChromaDB는 메타데이터에서 숫자를 저장할 때 타입이 중요하므로 int와 string 모두 시도
+                    page_results = None
+                    
+                    # 먼저 int로 시도
+                    try:
+                        page_results = self.collection.get(
+                            where={
+                                "$and": [
+                                    {"course_id": course_id},
+                                    {"type": "pdf_page"},
+                                    {"page_number": requested_page}  # int로 시도
+                                ]
+                            },
+                            include=["documents", "metadatas"],
+                        )
+                        if page_results.get("documents") and len(page_results["documents"]) > 0:
+                            print(f"[RAG DEBUG] ✅ 페이지 {requested_page} 문서 {len(page_results['documents'])}개 직접 검색 성공 (int 타입)")
+                    except Exception as e1:
+                        print(f"[RAG DEBUG] ⚠️ 페이지 {requested_page} int 타입 검색 실패: {e1}")
+                    
+                    # int로 실패했으면 string으로 시도
+                    if not page_results or not page_results.get("documents") or len(page_results["documents"]) == 0:
+                        try:
+                            page_results = self.collection.get(
+                                where={
+                                    "$and": [
+                                        {"course_id": course_id},
+                                        {"type": "pdf_page"},
+                                        {"page_number": str(requested_page)}  # string으로 시도
+                                    ]
+                                },
+                                include=["documents", "metadatas"],
+                            )
+                            if page_results.get("documents") and len(page_results["documents"]) > 0:
+                                print(f"[RAG DEBUG] ✅ 페이지 {requested_page} 문서 {len(page_results['documents'])}개 직접 검색 성공 (string 타입)")
+                        except Exception as e2:
+                            print(f"[RAG DEBUG] ⚠️ 페이지 {requested_page} string 타입 검색 실패: {e2}")
+                    
+                    # PDF 문서가 있는지 확인 (디버깅용)
+                    if not page_results or not page_results.get("documents") or len(page_results["documents"]) == 0:
+                        # 해당 course_id의 모든 PDF 문서 확인
+                        all_pdf_check = self.collection.get(
+                            where={
+                                "$and": [
+                                    {"course_id": course_id},
+                                    {"type": "pdf_page"}
+                                ]
+                            },
+                            include=["metadatas"],
+                            limit=5
+                        )
+                        if all_pdf_check.get("metadatas"):
+                            pdf_page_numbers = [m.get("page_number") for m in all_pdf_check["metadatas"]]
+                            print(f"[RAG DEBUG] 🔍 course_id={course_id}의 PDF 문서 확인: 페이지 번호 {pdf_page_numbers} (타입: {[type(p).__name__ for p in pdf_page_numbers]})")
+                        else:
+                            print(f"[RAG DEBUG] ⚠️ course_id={course_id}에 PDF 문서가 ChromaDB에 없습니다. PDF가 업로드되었지만 처리되지 않았을 수 있습니다.")
+                    
+                    if page_results and page_results.get("documents") and len(page_results["documents"]) > 0:
                         specific_page_docs = page_results["documents"]
                         specific_page_metas = page_results.get("metadatas", [])
                         # get()은 distance를 반환하지 않으므로 0.0으로 설정 (최우선)
@@ -215,6 +294,8 @@ class RAGPipeline:
                         print(f"[RAG DEBUG] ⚠️ 페이지 {requested_page} 문서를 찾지 못했습니다 (get 검색 결과 없음)")
                 except Exception as e:
                     print(f"[RAG DEBUG] ⚠️ 페이지 {requested_page} 직접 검색 중 오류: {e}")
+                    import traceback
+                    print(f"[RAG DEBUG] 상세 오류: {traceback.format_exc()}")
             
             # 질문을 임베딩으로 변환 (ingest_texts와 동일한 방식)
             try:
@@ -246,6 +327,35 @@ class RAGPipeline:
                 # 특정 페이지를 찾기 위해 더 많은 결과를 가져옴
                 n_results = max(k * 3, 20)  # 최소 20개, 또는 k의 3배
                 print(f"[RAG DEBUG] 📄 특정 페이지 {requested_page}를 찾기 위해 더 많은 결과 검색 (n_results={n_results})")
+            
+            # PDF 문서가 있는지 먼저 확인 (디버깅용)
+            pdf_check = self.collection.get(
+                where={
+                    "$and": [
+                        {"course_id": course_id},
+                        {"type": "pdf_page"}
+                    ]
+                },
+                include=["metadatas"],
+                limit=1
+            )
+            if pdf_check.get("metadatas") and len(pdf_check["metadatas"]) > 0:
+                # 전체 PDF 문서 수 확인
+                all_pdf = self.collection.get(
+                    where={
+                        "$and": [
+                            {"course_id": course_id},
+                            {"type": "pdf_page"}
+                        ]
+                    },
+                    include=["metadatas"]
+                )
+                pdf_count = len(all_pdf.get("ids", [])) if all_pdf.get("ids") else 0
+                pdf_page_numbers = [m.get("page_number") for m in all_pdf.get("metadatas", [])]
+                print(f"[RAG DEBUG] ✅ course_id={course_id}에 PDF 문서 {pdf_count}개가 ChromaDB에 존재합니다")
+                print(f"[RAG DEBUG] 📄 PDF 페이지 번호 목록: {sorted(set(pdf_page_numbers))[:10]}... (총 {len(set(pdf_page_numbers))}개 페이지)")
+            else:
+                print(f"[RAG DEBUG] ⚠️ course_id={course_id}에 PDF 문서가 ChromaDB에 없습니다. PDF가 업로드되었지만 처리되지 않았을 수 있습니다.")
             
             results = self.collection.query(
                 query_embeddings=query_embeddings,
@@ -390,12 +500,26 @@ class RAGPipeline:
         ]
         is_pdf_question = any(keyword in question_lower for keyword in pdf_related_keywords) or requested_page is not None
         
+        # 계산·수식 관련 질문인지 확인 (텍스트/자막 우선 사용)
+        calculation_keywords = [
+            "계산", "풀이", "풀어", "구해", "구하", "값", "답", "결과",
+            "수식", "공식", "방정식", "부등식", "함수", "미분", "적분",
+            "곱하기", "나누기", "더하기", "빼기", "곱셈", "나눗셈", "덧셈", "뺄셈",
+            "×", "÷", "+", "-", "=", "x", "y", "z",
+            "제곱", "루트", "근", "로그", "sin", "cos", "tan",
+            "숫자", "계수", "상수", "변수", "항", "차수"
+        ]
+        is_calculation_question = any(keyword in question_lower for keyword in calculation_keywords)
+        
         if is_pdf_question:
             print(f"[RAG DEBUG] 📄 PDF/강의자료 관련 질문으로 감지: '{question[:50]}...'")
             if requested_page:
                 print(f"[RAG DEBUG] 📄 특정 페이지 요청: {requested_page}페이지")
         else:
             print(f"[RAG DEBUG] 🎤 일반 질문으로 감지: '{question[:50]}...'")
+        
+        if is_calculation_question:
+            print(f"[RAG DEBUG] 🔢 계산·수식 관련 질문으로 감지: 텍스트/자막 우선 사용")
         
         # 검색 결과에서 페르소나 제거 및 타입별 분리
         segment_docs = []  # video_segment, audio_segment
@@ -482,7 +606,46 @@ class RAGPipeline:
         filtered_docs = []
         filtered_metas = []
         
-        if is_pdf_question:
+        # 계산·수식 질문인 경우: 텍스트/자막 우선 (PDF 이미지 설명보다 정확도가 높음)
+        if is_calculation_question:
+            print(f"[RAG DEBUG] 🔢 계산·수식 질문: 세그먼트(자막/STT) 우선, PDF는 보조로 사용")
+            # 세그먼트는 시간 기반 점수순으로 정렬 (최우선)
+            if segment_docs:
+                segment_sorted = sorted(
+                    zip(segment_docs, segment_metas, segment_scores),
+                    key=lambda x: (x[2], -x[1].get("start_time", 0) if x[1].get("start_time") else 0),
+                    reverse=True
+                )
+                filtered_docs.extend([doc for doc, _, _ in segment_sorted])
+                filtered_metas.extend([meta for _, meta, _ in segment_sorted])
+                print(f"[RAG DEBUG] 🎤 세그먼트를 최우선 배치 ({len(segment_docs)}개) - 계산 정확도 보장")
+            
+            # PDF는 거리순으로 정렬하여 보조로 추가 (이미지 설명보다 텍스트 우선)
+            if pdf_docs:
+                # PDF 문서 중 텍스트가 있는 것 우선, 이미지 설명은 보조
+                pdf_with_text = []
+                pdf_image_only = []
+                for doc, meta, dist in zip(pdf_docs, pdf_metas, pdf_distances):
+                    # 이미지 설명만 있는 문서인지 확인
+                    if "이미지/도표 설명" in doc and len(doc) < 200:  # 이미지 설명만 있는 경우
+                        pdf_image_only.append((doc, meta, dist))
+                    else:
+                        pdf_with_text.append((doc, meta, dist))
+                
+                # 텍스트가 있는 PDF 우선
+                if pdf_with_text:
+                    pdf_text_sorted = sorted(pdf_with_text, key=lambda x: x[2])
+                    filtered_docs.extend([doc for doc, _, _ in pdf_text_sorted])
+                    filtered_metas.extend([meta for _, meta, _ in pdf_text_sorted])
+                    print(f"[RAG DEBUG] 📄 PDF 텍스트 문서를 보조로 배치 ({len(pdf_with_text)}개)")
+                
+                # 이미지 설명만 있는 PDF는 마지막에 추가
+                if pdf_image_only:
+                    pdf_image_sorted = sorted(pdf_image_only, key=lambda x: x[2])
+                    filtered_docs.extend([doc for doc, _, _ in pdf_image_sorted])
+                    filtered_metas.extend([meta for _, meta, _ in pdf_image_sorted])
+                    print(f"[RAG DEBUG] 📄 PDF 이미지 설명 문서를 마지막에 배치 ({len(pdf_image_only)}개)")
+        elif is_pdf_question:
             # PDF 질문: PDF 우선, 세그먼트 보조
             if pdf_docs:
                 # 특정 페이지 요청이 있으면 해당 페이지를 최우선으로 필터링
@@ -591,6 +754,7 @@ class RAGPipeline:
             instructor_info=instructor_info,  # 강사 정보 전달
             course_info=course_info,  # 강의 정보 전달
             is_pdf_question=is_pdf_question,  # 질문 유형 전달
+            is_calculation_question=is_calculation_question,  # 계산·수식 질문 여부 전달
             requested_page=requested_page,  # 요청된 페이지 번호 전달
         )
         return {
@@ -611,6 +775,7 @@ class RAGPipeline:
         instructor_info: Optional[Dict[str, Any]] = None,
         course_info: Optional[Dict[str, Any]] = None,
         is_pdf_question: bool = False,
+        is_calculation_question: bool = False,
         requested_page: Optional[int] = None,
     ) -> str:
         """
@@ -812,7 +977,18 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
             segment_count = sum(1 for meta in metas if meta.get("type") in ["video_segment", "audio_segment"] or meta.get("start_time"))
             pdf_count = sum(1 for meta in metas if meta.get("type") == "pdf_page" or meta.get("page_number"))
             
-            if is_pdf_question:
+            if is_calculation_question:
+                # 계산·수식 질문 전략: 텍스트/자막 우선 (정확도 보장)
+                search_strategy = (
+                    "**검색 전략**: 이 질문은 계산, 수식, 공식에 대한 질문입니다.\n"
+                    "- **최우선**: 강사의 음성 설명(자막/STT)을 먼저 참고하세요. 강사가 설명한 수식과 계산 과정이 가장 정확합니다.\n"
+                    "- **보조**: 강의자료(PDF)의 텍스트 내용도 참고하세요.\n"
+                    "- **주의**: PDF의 이미지 설명은 Vision API로 생성된 것이므로, 숫자나 기호가 누락될 수 있습니다. "
+                    "계산이나 수식 질문에서는 강사 음성 설명이나 PDF 텍스트를 우선적으로 사용하세요.\n"
+                    "- **중요**: 모든 숫자, 계수, 상수, 기호를 정확히 확인하고 답변하세요. 하나라도 빠뜨리면 계산 결과가 달라질 수 있습니다.\n"
+                    "- 예: '2x'에서 2를 빼먹으면 안 됩니다. 'x² + 2x + 1'에서 모든 항을 정확히 읽어야 합니다.\n"
+                )
+            elif is_pdf_question:
                 # PDF 관련 질문 전략
                 # 이미지 설명이 포함되어 있는지 확인
                 has_image_descriptions = any("이미지/도표 설명" in doc or "도표 설명" in doc or "그림 설명" in doc for doc in docs)
@@ -833,7 +1009,16 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
                     "- **중요**: 강사가 강의자료에서 설명하는 내용과 강사 음성 설명을 모두 활용하여 "
                     "해당 강사의 강의 철학과 내용과 일치하는 답변을 제공하세요.\n"
                     "- 페이지 번호가 있으면 반드시 명시하세요 (예: \"페이지 X에 나와있는 내용입니다\").\n"
-                    "- **이미지/도표 질문**: 학생이 도표, 그림, 그래프에 대해 물어보면, 컨텍스트에 있는 '이미지/도표 설명'을 찾아서 그 내용을 상세히 설명하세요.\n"
+                    "- **이미지/도표 질문**: 학생이 도표, 그림, 그래프에 대해 물어보면, 컨텍스트에 있는 '이미지/도표 설명'을 찾아서 그 내용을 상세히 설명하세요.\n\n"
+                    "**답변 형식 지침**:\n"
+                    "- 절대 1. 2. 3. 같은 나열식으로만 답변하지 마세요.\n"
+                    "- 학생의 질문 의도를 파악하고, 그 의문을 해소하는 방식으로 자연스럽게 대화하세요.\n"
+                    "- 강의자료의 내용을 읽고 이해한 후, 학생이 궁금해하는 부분을 중심으로 설명하세요.\n"
+                    "- 예시: '6페이지 오른쪽 위에 있는 그림이 이해가 안 가요' → 그림의 내용을 설명하면서 학생의 이해를 돕는 방식으로 답변\n"
+                    "- 예시: 'I와 r이 뭘 의미하는데요?' → 학생이 특정 기호에 대해 물어보면, 그 기호의 의미를 명확히 설명하고 왜 그렇게 표시되었는지 설명\n"
+                    "- 예시: '7페이지 내용 요약해줘요' → 단순히 나열하지 말고, 페이지의 핵심 내용을 자연스럽게 설명하고 학생이 이해하기 쉽게 정리\n"
+                    "- 강의자료의 내용을 그대로 나열하는 것이 아니라, 학생의 질문에 맞춰 필요한 부분을 선별하여 설명하세요.\n"
+                    "- 강사의 말투와 교육 철학을 반영하여 친근하고 이해하기 쉽게 설명하세요.\n"
                 )
             else:
                 # 일반 질문 전략
@@ -885,9 +1070,24 @@ Context(강의 컨텍스트)에 없는 내용은 절대 답변하지 말 것.
                 "**강의 컨텍스트**:\n"
                 f"{context}\n\n"
                 "위 강의 컨텍스트를 바탕으로 질문에 답변하세요. "
-                "강의 내용을 직접 인용하거나 요약하여 답변하세요. "
-                "컨텍스트의 출처(강사 설명 또는 강의자료 페이지)를 구분하여 활용하세요. "
-                "이미지/도표 설명이 포함되어 있으면 반드시 활용하여 답변하세요.\n\n"
+                "**중요 - 답변 형식 (절대 준수)**:\n"
+                "- **절대 금지**: 1. 2. 3. 4. 같은 번호나 불릿 포인트(•, -, *)로 나열하지 마세요.\n"
+                "- **절대 금지**: '1. 직각:', '2. 대각선:', '3. 대칭성:' 같은 형식으로 답변하지 마세요.\n"
+                "- **필수**: 자연스러운 대화 형식으로 답변하세요. 예: '이 그림은...', '여기서 보면...', '특히 주목할 점은...' "
+                "같은 방식으로 자연스럽게 연결하여 설명하세요.\n"
+                "- **띄어쓰기 주의**: 문장 끝에 마침표(.)를 찍을 때는 띄어쓰기 없이 바로 붙여서 작성하세요. "
+                "예: '있습니다.' (O), '있습니다 .' (X), '있습니다. ' (X)\n"
+                "- **답변 예시 (나쁜 예)**: '1. 직각: 네 개의 꼭짓점... 2. 대각선: 두 개의... 3. 대칭성:...' (절대 이렇게 하지 마세요)\n"
+                "- **답변 예시 (좋은 예)**: '이 그림은 직사각형을 보여주고 있어요. 네 개의 꼭짓점이 모두 직각을 이루고 있고, "
+                "두 개의 대각선이 서로 교차하며 각각 절반으로 나뉘고 있네요. 이는 직사각형에서 두 대각선의 길이가 같다는 것을 의미합니다. "
+                "또한 대각선의 교차점에서 대칭을 이루고 있어서, 이 점이 사각형의 중심이 됩니다.' (이런 식으로 자연스럽게 연결하세요)\n"
+                "- 학생의 질문 의도를 파악하고, 그 의문을 해소하는 방식으로 설명하세요.\n"
+                "- 강의자료의 내용을 읽고 이해한 후, 학생이 궁금해하는 부분을 중심으로 설명하세요.\n"
+                "- 단순히 내용을 나열하는 것이 아니라, 학생의 질문에 맞춰 필요한 부분을 선별하여 설명하세요.\n"
+                "- 강사의 말투와 교육 철학을 반영하여 친근하고 이해하기 쉽게 설명하세요.\n"
+                "- 강의 내용을 직접 인용하거나 요약하여 답변하되, 자연스러운 대화 형식으로 작성하세요.\n"
+                "- 컨텍스트의 출처(강사 설명 또는 강의자료 페이지)를 구분하여 활용하세요.\n"
+                "- 이미지/도표 설명이 포함되어 있으면 반드시 활용하여 답변하세요.\n\n"
                 "**수능 관련 질문 처리**:\n"
                 "- 학생이 '내년 수능에 이 문제가 나올까?', '이 문제가 수능에 나올 가능성이 있나요?' 같은 질문을 하면, "
                 "강의에서 다룬 문제나 개념에 대한 수능 출제 가능성에 대해 교육적 관점에서 답변할 수 있습니다.\n"
