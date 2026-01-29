@@ -65,6 +65,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/api/status/"):
             return await call_next(request)
         
+        # 비디오 스트리밍은 rate limit 제외 (필수 리소스)
+        if request.url.path.startswith("/api/video/"):
+            return await call_next(request)
+        
+        # 트랜스크립트 엔드포인트는 rate limit 제외 (필수 리소스)
+        if "/transcript" in request.url.path:
+            return await call_next(request)
+        
         # Rate limit key 생성 (IP 주소 또는 사용자 ID)
         client_ip = request.client.host if request.client else "unknown"
         

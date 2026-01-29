@@ -82,9 +82,10 @@ def create_app() -> FastAPI:
     )
 
     # dh: Rate Limiting 미들웨어 추가
+    # 개발 환경에서는 더 높은 제한 설정 (프론트엔드 동시 요청 대응)
     app.add_middleware(
         RateLimitMiddleware,
-        max_requests=100,  # 시간당 최대 요청 수
+        max_requests=1000,  # 시간당 최대 요청 수 (개발 환경용으로 증가)
         window_seconds=3600,  # 1시간
     )
 
