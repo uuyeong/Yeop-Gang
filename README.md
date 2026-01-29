@@ -35,7 +35,6 @@
 - **멀티모달 처리**: 비디오, 오디오, PDF 교재, SMI 자막 파일을 통합하여 강의 컨텍스트를 완벽하게 이해
 - **실시간 타임라인 연동**: 챗봇 답변 내 타임스탬프를 클릭하면 해당 강의 구간으로 바로 이동
 - **과목 특화 기능**: 수학, 영어, 과학 등 과목별 특성에 맞춘 요약노트와 퀴즈 생성
-- **입시 정보 통합**: 수만휘 게시판 크롤링 데이터를 통합하여 입시 관련 질문에도 답변 가능
 
 ## 배포
 
@@ -43,7 +42,7 @@
 
 ### 배포 주소
 
-**프로덕션**: [https://yeop-gang.onrender.com](https://yeop-gang.onrender.com)
+**프로덕션**: [https://yeop-gang.onrender.com](https://yeop-gang-t41l.onrender.com/)
 
 ### 배포 구조
 
@@ -73,7 +72,6 @@
 - **퀴즈**: 5문제 객관식 퀴즈 자동 생성, 답변 선택, 자동 채점 및 점수 표시 (과목별 특화)
 - **강의 등록**: 원하는 강의를 등록하여 학습
 - **강의 검색**: 과목별, 강사별 강의 검색 및 필터링
-- **입시 정보 질문**: 수만휘 게시판 데이터를 활용한 입시 관련 질문 답변
 
 ### 강사용 기능
 
@@ -90,7 +88,6 @@
 - **멀티모달 처리**: PDF 이미지/도표 VLM 기반 설명 생성
 - **맞춤법 검사**: 한국어 맞춤법 자동 교정 (py-hanspell)
 - **가드레일**: 프롬프트 인젝션 방어, 부적절한 질문 필터링
-- **입시 정보 통합**: 수만휘 게시판 크롤링 데이터를 별도 ChromaDB 컬렉션에 저장하여 입시 관련 질문 답변
 
 ### 특화 기능
 
@@ -260,8 +257,7 @@ Yeop-Gang/
 │   │   │   ├── embeddings.py  # 텍스트 임베딩
 │   │   │   ├── vectorstore.py # ChromaDB 관리
 │   │   │   ├── pdf.py         # PDF 처리 (텍스트 + 이미지)
-│   │   │   ├── smi_parser.py  # SMI 자막 파싱
-│   │   │   └── admission_data.py  # 입시 정보 로더
+│   │   │   └── smi_parser.py  # SMI 자막 파싱
 │   │   ├── style_analyzer.py  # 강사 스타일 분석
 │   │   └── config.py      # AI 설정
 │   ├── api/               # API 엔드포인트 (Backend B)
@@ -312,8 +308,7 @@ Yeop-Gang/
 │   └── uploads/          # 업로드된 파일
 ├── ref/                   # 테스트 데이터
 │   ├── testcourse1/      # 테스트 강의 1
-│   ├── testcourse2/      # 테스트 강의 2
-│   └── 크롤링/            # 입시 정보 크롤링 데이터 (Git 무시)
+│   └── testcourse2/      # 테스트 강의 2
 ├── Dockerfile            # Docker 빌드 파일
 ├── start.sh              # 통합 실행 스크립트
 ├── README.md             # 이 파일
@@ -380,7 +375,6 @@ Yeop-Gang/
 - RAG 파이프라인 상세
 - 페르소나 추출 알고리즘 (강의 목록 단위 관리)
 - 멀티모달 처리 (PDF 이미지/도표)
-- 입시 정보 통합 (RAG 기반)
 - 보안 및 가드레일
 - 성능 최적화 (캐싱, 배치 처리, 파일 해시 기반 재사용)
 - 배포 아키텍처 (Render 통합 배포)
@@ -389,7 +383,7 @@ Yeop-Gang/
 
 ### 팀원 역할 분담 (R&R)
 
-- **`server/ai` (Backend A)**: RAG 파이프라인, Whisper STT, 페르소나 추출, 멀티모달 처리, 입시 정보 통합
+- **`server/ai` (Backend A)**: RAG 파이프라인, Whisper STT, 페르소나 추출, 멀티모달 처리
 - **`server/api`, `server/core` (Backend B)**: 비동기 Task 관리, 멀티 테넌트 DB, API 엔드포인트, 보안, 배포
 - **`client` (Frontend)**: 강사/학생 이원화 UI, 타임라인 연동, API 프록시, 동적 테마
 
